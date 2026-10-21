@@ -1,0 +1,18 @@
+name: "Delux M900 Pro"
+category: "mouse"
+icon: "🖱️"
+match:
+  vendor_id: "0x1d57"
+  product_id: "0xfa65"
+  interface_number: 2
+protocol: "compx_v1"
+config:
+  # Validated by capture (tools/capture.py) + CompX firmware protocol:
+  # mouse pushes [0x03, 0x30, 0x40, <state>, <battery>] every ~2s
+  # state: 0x01 = on battery, 0x02 = fully charged (100%), 0x03 = charging in progress
+  report_id: 0x03
+  battery_offset: 4
+  status_offset: 3
+  listen_timeout: 4.5
+  charging_seconds_per_percent: 75
+  query_payload: [0x04, 0x55, 0x40, 0x00]

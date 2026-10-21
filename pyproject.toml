@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "areyoulowbattery"
+version = "0.1.0"
+description = "Lightweight battery monitor for wireless mice, keyboards and headsets on Linux (KDE, Waybar, Polybar)."
+readme = "README.md"
+authors = [{ name = "Ryan", email = "developer@local" }]
+license = { text = "MIT" }
+requires-python = ">=3.8"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+areyoulowbattery = "cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["areyoulowbattery*", "profiles*"]

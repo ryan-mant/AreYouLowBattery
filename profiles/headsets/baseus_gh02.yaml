@@ -1,0 +1,14 @@
+name: "Baseus AeQur GH02"
+category: "headset"
+icon: "🎧"
+match:
+  vendor_id: "0x10d6"
+  product_id: "0x4802"
+  interface_number: 0
+protocol: "actions_v1"
+config:
+  report_id: 0x55
+  request_payload: [0x55, 0x01, 0x00, 0x00]
+  payload_length: 64
+  battery_offset: 4
+  charging_offset: 5
