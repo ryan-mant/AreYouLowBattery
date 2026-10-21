@@ -26,7 +26,16 @@ def load_profile(file_path: str) -> Optional[DeviceProfile]:
         if vid is None:
             return None
             
-        pid = parse_int_or_hex(match_data.get("product_id"))
+        raw_pid = match_data.get("product_id")
+        pids = []
+        pid = None
+        if isinstance(raw_pid, list):
+            pids = [p for p in (parse_int_or_hex(x) for x in raw_pid) if p is not None]
+        else:
+            pid = parse_int_or_hex(raw_pid)
+            if pid is not None:
+                pids = [pid]
+
         iface = match_data.get("interface_number")
         if iface is not None:
             iface = int(iface)
@@ -34,6 +43,7 @@ def load_profile(file_path: str) -> Optional[DeviceProfile]:
         match = DeviceMatch(
             vendor_id=vid,
             product_id=pid,
+            product_ids=pids,
             interface_number=iface,
             usage_page=parse_int_or_hex(match_data.get("usage_page"))
         )

@@ -3,7 +3,8 @@ category: "mouse"
 icon: "🖱️"
 match:
   vendor_id: "0x1d57"
-  product_id: "0xfa65"
+  # 0xfa65 = 2.4GHz 8K Wireless Receiver | 0xfa73 = USB-C Wired Mode
+  product_id: ["0xfa65", "0xfa73"]
   interface_number: 2
 protocol: "compx_v1"
 config:

@@ -30,7 +30,10 @@ def format_text_output(results: List[Tuple[DeviceProfile, BatteryStatus]], show_
             continue
 
         charging_symbol = "⚡" if status.is_charging else ""
-        parts.append(f"{profile.icon} {status.percentage}%{charging_symbol}")
+        if status.percentage is None:
+            parts.append(f"{profile.icon} {charging_symbol or '?'}")
+        else:
+            parts.append(f"{profile.icon} {status.percentage}%{charging_symbol}")
 
     if not parts:
         # Fallback if no device has > 0%
@@ -63,8 +66,9 @@ def format_full_output(results: List[Tuple[DeviceProfile, BatteryStatus]]) -> st
     for profile, status in results:
         state = "ONLINE" if status.is_connected else "OFFLINE"
         chg = " ⚡ (Charging)" if status.is_charging else ""
+        pct_str = f" {status.percentage}%" if status.percentage is not None else ""
         lines.append(f"Device: {profile.name} [{profile.category.value.upper()}]")
-        lines.append(f"  Status: {state} {status.percentage}%{chg}")
+        lines.append(f"  Status: {state}{pct_str}{chg}")
         if status.details:
             lines.append(f"  Details: {status.details}")
         lines.append("-" * 32)

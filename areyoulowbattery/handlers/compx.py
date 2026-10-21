@@ -8,6 +8,7 @@ from areyoulowbattery.handlers.base import BaseProtocolHandler
 
 CACHE_DIR = "/dev/shm"
 CACHE_TTL = 3600  # seconds a cached reading is still considered valid
+WIRED_BASE_MAX_AGE = 300  # max age (5 min) of a pre-cable wireless reading to trust as wired charge base
 
 # CompX / Beken event 0x40 battery state values (byte 3):
 STATE_NORMAL = 0x01
@@ -97,12 +98,13 @@ class CompXHandler(BaseProtocolHandler):
 
             # Filter the transient 0x64 (100%) packet emitted right when the mouse
             # is lifted from the dock or initializes communication before the first ADC read.
+            prev_pct = cached.get("percentage") if cached else None
             if (
                 pkt is not None
-                and cached
+                and prev_pct is not None
                 and pkt[status_offset] == STATE_NORMAL
                 and pkt[batt_offset] >= 100
-                and cached.get("percentage", 0) < 95
+                and prev_pct < 95
             ):
                 retry_pkt = self._listen_for_report(transport, cfg)
                 if retry_pkt is not None:
@@ -132,21 +134,48 @@ class CompXHandler(BaseProtocolHandler):
             details = f"Live report: {raw_hex} (fully charged)"
         elif state == STATE_CHARGING:
             is_charging = True
-            # Keep track of when charging started and the initial frozen percentage
-            if cached and cached.get("charge_start") and cached.get("charge_base") == raw_pct:
+            cache_age = (now - cached.get("timestamp", 0)) if cached else float("inf")
+
+            if raw_pct < 100:
+                # Magnetic dock mode: the mouse itself reports the frozen pre-dock percentage
+                if cached and cached.get("charge_start") and cached.get("charge_base") == raw_pct:
+                    charge_start = cached["charge_start"]
+                    charge_base = cached["charge_base"]
+                else:
+                    charge_start = now
+                    charge_base = raw_pct
+            elif cached and cache_age <= WIRED_BASE_MAX_AGE and cached.get("charge_base") is not None:
+                # Wired USB-C mode continuing an active tracked charging session
                 charge_start = cached["charge_start"]
                 charge_base = cached["charge_base"]
-            else:
+            elif (
+                cached
+                and cache_age <= WIRED_BASE_MAX_AGE
+                and cached.get("percentage") is not None
+                and cached["percentage"] < 100
+            ):
+                # Wired USB-C mode right after a fresh wireless reading (< 5 min ago)
                 charge_start = now
-                charge_base = raw_pct
+                charge_base = cached["percentage"]
+            else:
+                # Wired USB-C mode with no recent pre-cable reading: do not invent a percentage
+                charge_start = None
+                charge_base = None
 
-            elapsed = max(0.0, now - charge_start)
-            estimated_gain = int(elapsed // secs_per_pct)
-            percentage = min(99, charge_base + estimated_gain)
-            details = (
-                f"Live report: {raw_hex} (charging: base {charge_base}% "
-                f"+ ~{estimated_gain}% over {int(elapsed)}s)"
-            )
+            if charge_base is not None and charge_start is not None:
+                elapsed = max(0.0, now - charge_start)
+                estimated_gain = int(elapsed // secs_per_pct)
+                percentage = min(99, charge_base + estimated_gain)
+                details = (
+                    f"Live report: {raw_hex} (charging: base {charge_base}% "
+                    f"+ ~{estimated_gain}% over {int(elapsed)}s)"
+                )
+            else:
+                percentage = None
+                details = (
+                    f"Live report: {raw_hex} (charging via USB-C cable; "
+                    f"initial % unknown without recent wireless reading)"
+                )
         else:
             # STATE_NORMAL (0x01)
             percentage = raw_pct

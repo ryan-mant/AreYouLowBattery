@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 class DeviceCategory(str, Enum):
     MOUSE = "mouse"
@@ -10,7 +10,7 @@ class DeviceCategory(str, Enum):
 
 @dataclass
 class BatteryStatus:
-    percentage: int
+    percentage: Optional[int]
     is_charging: bool = False
     is_connected: bool = True
     details: Optional[str] = None
@@ -20,6 +20,7 @@ class BatteryStatus:
 class DeviceMatch:
     vendor_id: int
     product_id: Optional[int] = None
+    product_ids: List[int] = field(default_factory=list)
     interface_number: Optional[int] = None
     usage_page: Optional[int] = None
 

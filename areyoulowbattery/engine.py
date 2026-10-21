@@ -13,7 +13,9 @@ class BatteryEngine:
             match = profile.match
             if match.vendor_id != dev.vendor_id:
                 continue
-            if match.product_id is not None and match.product_id != dev.product_id:
+            if match.product_ids and dev.product_id not in match.product_ids:
+                continue
+            elif not match.product_ids and match.product_id is not None and match.product_id != dev.product_id:
                 continue
             if match.interface_number is not None and match.interface_number != dev.interface_number:
                 continue
