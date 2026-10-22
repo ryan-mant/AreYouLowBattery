@@ -379,6 +379,18 @@ def main():
 
     args = parser.parse_args()
 
+    # When double-clicked in Windows Explorer or launched without CLI arguments, default to Tray mode
+    is_cli_query = any(
+        arg in sys.argv for arg in [
+            "--format", "-f", "--poll", "--list-devices", "--daemon",
+            "--all", "-a", "--install-rules", "install", "uninstall", "daemon"
+        ]
+    )
+    if not is_cli_query or args.tray or args.action == "tray":
+        from areyoulowbattery.tray import run_tray
+        run_tray()
+        return
+
     if args.action == "install":
         cmd_install()
         return
@@ -395,11 +407,6 @@ def main():
         cmd_list_devices()
         return
 
-    if args.tray or args.action == "tray":
-        from areyoulowbattery.tray import run_tray
-        run_tray()
-        return
-
     if args.daemon or args.action == "daemon":
         run_daemon_loop()
         return
@@ -414,4 +421,22 @@ def main():
         print(format_text_output(results, show_all=args.all))
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        log_file = os.path.join(tempfile.gettempdir(), "areyoulowbattery_error.log")
+        try:
+            with open(log_file, "w") as f:
+                f.write(err_msg)
+        except Exception:
+            pass
+        if sys.platform == "win32":
+            try:
+                from PySide6.QtWidgets import QApplication, QMessageBox
+                app = QApplication.instance() or QApplication(sys.argv)
+                QMessageBox.critical(None, "AreYouLowBattery Error", f"An error occurred:\n\n{e}\n\nLog saved to:\n{log_file}")
+            except Exception:
+                pass
+        raise

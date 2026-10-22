@@ -184,6 +184,13 @@ def run_tray():
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(menu)
     tray.show()
+    if sys.platform == "win32":
+        tray.showMessage(
+            "AreYouLowBattery",
+            "Battery monitor is running in your System Tray (check the ^ arrow).",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
 
     current_supported_devices: List[Tuple[DeviceProfile, BatteryStatus]] = []
 
