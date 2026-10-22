@@ -174,10 +174,50 @@ def run_tray():
     sep_action = menu.addSeparator()
     rename_menu = menu.addMenu("Rename device...")
     refresh_action = menu.addAction("Refresh now")
+    menu.addSeparator()
+    uninstall_action = menu.addAction("Uninstall...")
     quit_action = menu.addAction("Quit")
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(menu)
     tray.show()
+
+    def prompt_uninstall():
+        from PySide6.QtWidgets import QMessageBox
+        import subprocess, shutil, glob
+        reply = QMessageBox.question(
+            None,
+            "Uninstall AreYouLowBattery",
+            "Are you sure you want to completely uninstall AreYouLowBattery?\n\nThis will stop and remove the background service, delete the binary and clean up all configuration files.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            subprocess.run(["systemctl", "--user", "stop", "areyoulowbattery.service"], check=False)
+            subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=False)
+            service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
+            if os.path.exists(service_path):
+                try:
+                    os.remove(service_path)
+                except OSError:
+                    pass
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+            target_bin = os.path.expanduser("~/.local/bin/areyoulowbattery")
+            if os.path.exists(target_bin):
+                try:
+                    os.remove(target_bin)
+                except OSError:
+                    pass
+            config_dir = os.path.expanduser("~/.config/areyoulowbattery")
+            if os.path.exists(config_dir):
+                shutil.rmtree(config_dir, ignore_errors=True)
+            for f in glob.glob("/dev/shm/areyoulowbattery*"):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+            app.quit()
+
+    uninstall_action.triggered.connect(prompt_uninstall)
 
     def on_tray_activated(reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:

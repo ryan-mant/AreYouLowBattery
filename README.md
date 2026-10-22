@@ -43,10 +43,18 @@ chmod +x areyoulowbattery
 
 That's it! It configures `udev` rules, installs the binary to `~/.local/bin/areyoulowbattery`, starts the `systemd --user` service, and shows the battery icon in your System Tray.
 
-To remove the service later:
-```bash
-areyoulowbattery uninstall
-```
+### 🗑️ Clean Uninstallation
+
+Want to completely remove AreYouLowBattery? You can do it in two easy ways:
+
+* **Via System Tray (GUI):** Right-click the battery icon in your system tray and select **"Uninstall..."** — confirm with Yes, and the app will stop, remove the service, delete configurations, and close cleanly.
+* **Via Terminal (CLI):**
+  ```bash
+  areyoulowbattery uninstall
+  # Or from source: python3 cli.py uninstall
+  ```
+
+This cleanly stops and disables the `systemd` service, removes `~/.local/bin/areyoulowbattery`, cleans `~/.config/areyoulowbattery`, removes `/dev/shm` caches, and offers to remove `/etc/udev/rules.d/99-areyoulowbattery.rules`. **Zero background bloat or leftover services remain.**
 
 ### Option B: From Source
 

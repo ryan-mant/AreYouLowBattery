@@ -219,13 +219,56 @@ WantedBy=default.target
 
 
 def cmd_uninstall():
-    print("=== Removing AreYouLowBattery service ===")
-    subprocess.run(["systemctl", "--user", "disable", "--now", "areyoulowbattery.service"], check=False)
+    print("=== Uninstalling AreYouLowBattery ===")
+
+    # 1. Stop and disable systemd user service
+    print("[1/4] Stopping and disabling systemd service...")
+    subprocess.run(["systemctl", "--user", "stop", "areyoulowbattery.service"], check=False)
+    subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=False)
     service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
     if os.path.exists(service_path):
         os.remove(service_path)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    print("✅ Service removed.")
+
+    # 2. Remove installed binary in ~/.local/bin if present
+    print("[2/4] Removing binary from ~/.local/bin...")
+    target_bin = os.path.expanduser("~/.local/bin/areyoulowbattery")
+    if os.path.exists(target_bin):
+        try:
+            os.remove(target_bin)
+            print(f"  Removed {target_bin}")
+        except OSError as e:
+            print(f"  Could not remove {target_bin}: {e}")
+
+    # 3. Clean up user configuration and shared memory cache
+    print("[3/4] Cleaning user config and memory cache...")
+    config_dir = os.path.expanduser("~/.config/areyoulowbattery")
+    if os.path.exists(config_dir):
+        shutil.rmtree(config_dir, ignore_errors=True)
+        print(f"  Removed {config_dir}")
+
+    for f in glob.glob("/dev/shm/areyoulowbattery*"):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+    # 4. Remove udev rules if present
+    udev_path = "/etc/udev/rules.d/99-areyoulowbattery.rules"
+    if os.path.exists(udev_path):
+        print(f"[4/4] Removing {udev_path}...")
+        try:
+            res = subprocess.run(["sudo", "rm", "-f", udev_path], check=False)
+            if res.returncode == 0:
+                subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=False)
+                subprocess.run(["sudo", "udevadm", "trigger"], check=False)
+                print("  Udev rules removed.")
+        except Exception:
+            print(f"  Note: To remove udev rules manually, run: sudo rm {udev_path}")
+    else:
+        print("[4/4] No udev rules to remove.")
+
+    print("\n✅ AreYouLowBattery was completely uninstalled. No background services or files remain.")
 
 
 def cmd_list_devices():
