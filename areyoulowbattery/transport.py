@@ -84,13 +84,15 @@ def enumerate_hidraw() -> List[HidrawDevice]:
 
 class HidrawTransport:
     """Handles low-level read and write on a /dev/hidraw node."""
-    def __init__(self, dev_path: str):
+    def __init__(self, dev_path: str, read_only: bool = False):
         self.dev_path = dev_path
+        self.read_only = read_only
         self._fd: Optional[int] = None
 
     def open(self):
         if self._fd is None:
-            self._fd = os.open(self.dev_path, os.O_RDWR | os.O_NONBLOCK)
+            mode = os.O_RDONLY if self.read_only else os.O_RDWR
+            self._fd = os.open(self.dev_path, mode | os.O_NONBLOCK)
 
     def close(self):
         if self._fd is not None:

@@ -76,13 +76,118 @@ class CompXHandler(BaseProtocolHandler):
                 return pkt
         return None
 
+    def _has_feature_08_descriptor(self, dev: HidrawDevice) -> bool:
+        try:
+            hid_name = os.path.basename(dev.dev_path)
+            desc_path = f"/sys/class/hidraw/{hid_name}/device/report_descriptor"
+            if os.path.exists(desc_path):
+                desc = open(desc_path, "rb").read()
+                return b"\x85\x08" in desc and b"\x85\x09" in desc
+        except Exception:
+            pass
+        return False
+
+    def _read_feature_08_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> BatteryStatus:
+        """
+        CompX 1K / Areson protocol (VID: 0x25a7, e.g. Ajazz, Attack Shark X3/X6, Pulsar, Lamzu, VXE):
+          - Sends 17-byte Feature Report 0x08: [0x08, 0x04, 0x00 * 14, 0x49]
+            (where byte 16 is checksum: (0x55 - sum(bytes[0..15])) & 0xFF = 0x49)
+          - Reads 17-byte Input Report 0x09:
+            [0x09, 0x04, <status>, 0x00, 0x00, <level>, <battery_pct>, <is_charging>, ..., <checksum>]
+        """
+        transport = HidrawTransport(dev.dev_path, read_only=False)
+        try:
+            transport.open()
+        except PermissionError:
+            return BatteryStatus(0, is_connected=False,
+                                 details="Permission denied. Please install udev rules.")
+        except OSError as e:
+            return BatteryStatus(0, is_connected=False, details=f"Failed to open device: {e}")
+
+        cached = self._read_cache(profile)
+        pkt = None
+
+        with transport:
+            req = bytearray(17)
+            req[0] = 0x08
+            req[1] = 0x04
+            req[16] = 0x49  # (0x55 - (0x08 + 0x04)) & 0xFF
+            try:
+                transport.send_feature_report(bytes(req))
+            except OSError as e:
+                return BatteryStatus(0, is_connected=False, details=f"Feature 0x08 query failed: {e}")
+
+            deadline = time.time() + 0.4
+            while time.time() < deadline:
+                rx = transport.read_input_report(
+                    length=64,
+                    timeout_sec=min(0.15, max(0.01, deadline - time.time()))
+                )
+                if rx and len(rx) >= 8 and rx[0] == 0x09 and rx[1] == 0x04 and rx[2] == 0x00:
+                    pkt = rx
+                    break
+
+        if pkt is None or (pkt[5] == 0 and pkt[6] == 0 and pkt[7] == 0):
+            if cached and cached.get("percentage") is not None:
+                age = int(time.time() - cached["timestamp"])
+                return BatteryStatus(
+                    cached["percentage"],
+                    is_charging=cached.get("is_charging", False),
+                    is_connected=True,
+                    details=f"Cached ({age}s ago, mouse asleep)"
+                )
+            return BatteryStatus(0, is_connected=False, details="Mouse asleep or turned off")
+
+        percentage = max(0, min(100, pkt[6]))
+        is_charging = bool(pkt[7])
+        raw_hex = pkt.hex()
+
+        # When the mouse reaches 100% on the cable (Green LED), the charger IC cuts off
+        # and reports [0x64, 0x00] (100%, not charging), but periodically pulses a brief
+        # trickle top-off [0x5f, 0x01] (95%, charging) as voltage relaxes by ~10mV.
+        # Once 100% cutoff is reached, latch at 100% across trickle top-off pulses.
+        full_latched = bool(cached.get("full_latched", False)) if cached else False
+        if percentage == 100 and not is_charging:
+            full_latched = True
+        elif full_latched and is_charging and percentage >= 95:
+            percentage = 100
+            is_charging = False
+        else:
+            full_latched = False
+
+        secs_per_pct = profile.config.get("charging_seconds_per_percent", 75)
+        eta_seconds = (
+            max(60, int((100 - percentage) * secs_per_pct))
+            if (is_charging and percentage < 100)
+            else None
+        )
+
+        self._write_cache(profile, {
+            "percentage": percentage,
+            "is_charging": is_charging,
+            "full_latched": full_latched,
+            "eta_seconds": eta_seconds,
+            "raw": raw_hex,
+        })
+        return BatteryStatus(
+            percentage,
+            is_charging=is_charging,
+            is_connected=True,
+            details=f"Live report: {raw_hex}",
+            eta_seconds=eta_seconds,
+        )
+
     def read_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> Optional[BatteryStatus]:
         cfg = profile.config
+        if cfg.get("feature_report_id") == 0x08 or self._has_feature_08_descriptor(dev):
+            return self._read_feature_08_battery(dev, profile)
+
         batt_offset = cfg.get("battery_offset", 4)
         status_offset = cfg.get("status_offset", 3)
         secs_per_pct = cfg.get("charging_seconds_per_percent", 75)
 
-        transport = HidrawTransport(dev.dev_path)
+        query = cfg.get("query_payload")
+        transport = HidrawTransport(dev.dev_path, read_only=not bool(query))
         try:
             transport.open()
         except PermissionError:
@@ -166,12 +271,15 @@ class CompXHandler(BaseProtocolHandler):
                 elapsed = max(0.0, now - charge_start)
                 estimated_gain = int(elapsed // secs_per_pct)
                 percentage = min(99, charge_base + estimated_gain)
+                total_needed = (100 - charge_base) * secs_per_pct
+                eta_seconds = max(60, int(total_needed - elapsed))
                 details = (
                     f"Live report: {raw_hex} (charging: base {charge_base}% "
                     f"+ ~{estimated_gain}% over {int(elapsed)}s)"
                 )
             else:
                 percentage = None
+                eta_seconds = None
                 details = (
                     f"Live report: {raw_hex} (charging via USB-C cable; "
                     f"initial % unknown without recent wireless reading)"
@@ -182,14 +290,25 @@ class CompXHandler(BaseProtocolHandler):
             is_charging = False
             charge_start = None
             charge_base = None
+            eta_seconds = None
             details = f"Live report: {raw_hex}"
+
+        if state == STATE_FULLY_CHARGED:
+            eta_seconds = None
 
         self._write_cache(profile, {
             "percentage": percentage,
             "is_charging": is_charging,
             "charge_start": charge_start,
             "charge_base": charge_base,
+            "eta_seconds": eta_seconds,
             "raw": raw_hex,
         })
 
-        return BatteryStatus(percentage, is_charging=is_charging, is_connected=True, details=details)
+        return BatteryStatus(
+            percentage,
+            is_charging=is_charging,
+            is_connected=True,
+            details=details,
+            eta_seconds=eta_seconds,
+        )

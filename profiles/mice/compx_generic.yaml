@@ -1,0 +1,14 @@
+name: "CompX / Beken Wireless Mouse"
+category: "mouse"
+icon: "🖱️"
+match:
+  vendor_id: "0x1d57"
+  # Generic fallback for any 0x1d57 OEM wireless mouse on vendor interface 2
+  interface_number: 2
+protocol: "compx_v1"
+config:
+  report_id: 0x03
+  battery_offset: 4
+  status_offset: 3
+  listen_timeout: 4.5
+  charging_seconds_per_percent: 75

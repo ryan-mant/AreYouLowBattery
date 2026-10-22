@@ -16,4 +16,3 @@ config:
   status_offset: 3
   listen_timeout: 4.5
   charging_seconds_per_percent: 75
-  query_payload: [0x04, 0x55, 0x40, 0x00]

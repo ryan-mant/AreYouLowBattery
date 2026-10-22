@@ -1,0 +1,11 @@
+name: "CompX 2.4G Dual Mode Mouse"
+category: "mouse"
+icon: "🖱️"
+match:
+  vendor_id: "0x25a7"
+  # Generic fallback for any 0x25a7 Areson/CompX wireless mouse on interface 1
+  interface_number: 1
+protocol: "compx_v1"
+config:
+  feature_report_id: 0x08
+  report_id: 0x09

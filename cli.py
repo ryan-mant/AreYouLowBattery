@@ -3,7 +3,9 @@ import os
 import sys
 import json
 import time
+import shutil
 import argparse
+import subprocess
 from typing import List, Tuple
 
 # Ensure package is discoverable
@@ -11,7 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from areyoulowbattery.engine import BatteryEngine
 from areyoulowbattery.transport import enumerate_hidraw
-from areyoulowbattery.models import DeviceProfile, BatteryStatus, DeviceCategory
+from areyoulowbattery.profile_loader import get_resource_dir
+from areyoulowbattery.models import DeviceProfile, BatteryStatus, DeviceCategory, DeviceMatch
 
 CACHE_FILE = "/dev/shm/areyoulowbattery_status.json"
 
@@ -66,9 +69,11 @@ def format_full_output(results: List[Tuple[DeviceProfile, BatteryStatus]]) -> st
     for profile, status in results:
         state = "ONLINE" if status.is_connected else "OFFLINE"
         chg = " ⚡ (Charging)" if status.is_charging else ""
+        eta_str = status.format_eta()
+        eta_part = f" [{eta_str}]" if eta_str else ""
         pct_str = f" {status.percentage}%" if status.percentage is not None else ""
         lines.append(f"Device: {profile.name} [{profile.category.value.upper()}]")
-        lines.append(f"  Status: {state}{pct_str}{chg}")
+        lines.append(f"  Status: {state}{pct_str}{chg}{eta_part}")
         if status.details:
             lines.append(f"  Details: {status.details}")
         lines.append("-" * 32)
@@ -76,9 +81,10 @@ def format_full_output(results: List[Tuple[DeviceProfile, BatteryStatus]]) -> st
 
 def run_daemon_loop():
     """Lightweight background daemon that monitors events and keeps /dev/shm cache fresh."""
-    print("Starting AreYouLowBattery daemon (caching to /dev/shm)...")
+    print("Starting AreYouLowBattery daemon (caching to /dev/shm)...", flush=True)
     engine = BatteryEngine()
-    
+    tmp_file = CACHE_FILE + ".tmp"
+
     while True:
         try:
             results = engine.poll_all_devices()
@@ -88,47 +94,56 @@ def run_daemon_loop():
                     "name": profile.name,
                     "category": profile.category.value,
                     "icon": profile.icon,
+                    "protocol": profile.protocol,
                     "percentage": status.percentage,
                     "is_charging": status.is_charging,
                     "is_connected": status.is_connected,
+                    "supported": status.supported,
                     "details": status.details,
                     "timestamp": time.time()
                 })
-            with open(CACHE_FILE, "w") as f:
+            with open(tmp_file, "w") as f:
                 json.dump(cached_data, f)
+            os.replace(tmp_file, CACHE_FILE)
         except Exception as e:
-            print(f"Daemon error: {e}", file=sys.stderr)
-        
-        time.sleep(10)
+            print(f"Daemon error: {e}", file=sys.stderr, flush=True)
 
-def read_from_cache_or_poll(engine: BatteryEngine, force_poll: bool = False):
+        time.sleep(1)
+
+def read_from_cache_or_poll(force_poll: bool = False) -> List[Tuple[DeviceProfile, BatteryStatus]]:
     # Only trust the daemon cache if it was refreshed recently (daemon is alive)
-    cache_fresh = os.path.exists(CACHE_FILE) and time.time() - os.path.getmtime(CACHE_FILE) < 30
+    cache_fresh = os.path.exists(CACHE_FILE) and time.time() - os.path.getmtime(CACHE_FILE) < 15
     if not force_poll and cache_fresh:
         try:
             with open(CACHE_FILE, "r") as f:
                 data = json.load(f)
             results = []
             for item in data:
-                matching = [p for p in engine.profiles if p.name == item["name"]]
-                if matching:
-                    profile = matching[0]
-                    status = BatteryStatus(
-                        percentage=item["percentage"],
-                        is_charging=item.get("is_charging", False),
-                        is_connected=item.get("is_connected", False),
-                        details=item.get("details")
-                    )
-                    results.append((profile, status))
+                profile = DeviceProfile(
+                    name=item["name"],
+                    category=DeviceCategory(item.get("category", "other")),
+                    icon=item.get("icon", "🔋"),
+                    match=DeviceMatch(vendor_id=0),
+                    protocol=item.get("protocol", "cached"),
+                )
+                status = BatteryStatus(
+                    percentage=item["percentage"],
+                    is_charging=item.get("is_charging", False),
+                    is_connected=item.get("is_connected", False),
+                    details=item.get("details"),
+                    supported=item.get("supported", True),
+                    eta_seconds=item.get("eta_seconds"),
+                )
+                results.append((profile, status))
             if results:
                 return results
         except Exception:
             pass
+    engine = BatteryEngine()
     return engine.poll_all_devices()
 
 def cmd_install_rules():
-    project_dir = os.path.dirname(os.path.abspath(__file__))
-    rules_src = os.path.join(project_dir, "rules", "99-areyoulowbattery.rules")
+    rules_src = os.path.join(get_resource_dir(), "rules", "99-areyoulowbattery.rules")
     rules_dst = "/etc/udev/rules.d/99-areyoulowbattery.rules"
 
     if not os.path.exists(rules_src):
@@ -137,6 +152,81 @@ def cmd_install_rules():
 
     print(f"To install udev rules, run the following command:")
     print(f"\n  sudo cp \"{rules_src}\" \"{rules_dst}\" && sudo udevadm control --reload-rules && sudo udevadm trigger\n")
+
+
+def cmd_install():
+    """Automated one-step installer: udev rules + systemd user service + System Tray."""
+    print("=== Installing AreYouLowBattery ===")
+    rules_src = os.path.join(get_resource_dir(), "rules", "99-areyoulowbattery.rules")
+    rules_dst = "/etc/udev/rules.d/99-areyoulowbattery.rules"
+
+    need_udev = True
+    if os.path.exists(rules_dst) and os.path.exists(rules_src):
+        try:
+            if open(rules_dst, "rb").read() == open(rules_src, "rb").read():
+                need_udev = False
+                print("[1/3] Udev rules are already installed and up to date.")
+        except OSError:
+            pass
+
+    if need_udev and os.path.exists(rules_src):
+        print("[1/3] Installing USB permission rules (udev)...")
+        subprocess.run(["sudo", "cp", rules_src, rules_dst], check=True)
+        subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=True)
+        subprocess.run(["sudo", "udevadm", "trigger"], check=True)
+
+    # Determine ExecStart command (standalone binary vs python script)
+    if getattr(sys, "frozen", False):
+        bin_dir = os.path.expanduser("~/.local/bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        target_bin = os.path.join(bin_dir, "areyoulowbattery")
+        src_bin = os.path.realpath(sys.executable)
+        if src_bin != os.path.realpath(target_bin):
+            shutil.copy2(src_bin, target_bin)
+            os.chmod(target_bin, 0o755)
+        exec_start = f"{target_bin} --tray"
+        print(f"[2/3] Binary installed to {target_bin}")
+    else:
+        script_path = os.path.abspath(__file__)
+        exec_start = f"{sys.executable} {script_path} --tray"
+        print(f"[2/3] Configuring service from {script_path}")
+
+    systemd_dir = os.path.expanduser("~/.config/systemd/user")
+    os.makedirs(systemd_dir, exist_ok=True)
+    service_path = os.path.join(systemd_dir, "areyoulowbattery.service")
+
+    service_content = f"""[Unit]
+Description=AreYouLowBattery - Wireless Peripheral Battery Monitor & System Tray
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart={exec_start}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+"""
+    with open(service_path, "w") as f:
+        f.write(service_content)
+
+    print("[3/3] Enabling and starting systemd --user service...")
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now", "areyoulowbattery.service"], check=True)
+    subprocess.run(["systemctl", "--user", "restart", "areyoulowbattery.service"], check=True)
+    print("\n✅ Done! The battery icon is now active in your System Tray.")
+
+
+def cmd_uninstall():
+    print("=== Removing AreYouLowBattery service ===")
+    subprocess.run(["systemctl", "--user", "disable", "--now", "areyoulowbattery.service"], check=False)
+    service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
+    if os.path.exists(service_path):
+        os.remove(service_path)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    print("✅ Service removed.")
+
 
 def cmd_list_devices():
     devices = enumerate_hidraw()
@@ -148,6 +238,12 @@ def main():
     parser = argparse.ArgumentParser(
         prog="areyoulowbattery",
         description="Lightweight battery reader for wireless peripherals (mice, headsets, keyboards) on Linux."
+    )
+    parser.add_argument(
+        "action",
+        nargs="?",
+        choices=["install", "uninstall", "tray", "daemon"],
+        help="Optional command: 'install' configures udev + systemd + System Tray automatically"
     )
     parser.add_argument(
         "--format", "-f",
@@ -164,6 +260,11 @@ def main():
         "--daemon",
         action="store_true",
         help="Run in background daemon mode to monitor and cache telemetry"
+    )
+    parser.add_argument(
+        "--tray",
+        action="store_true",
+        help="Run System Tray icon + background cache daemon"
     )
     parser.add_argument(
         "--poll",
@@ -183,6 +284,14 @@ def main():
 
     args = parser.parse_args()
 
+    if args.action == "install":
+        cmd_install()
+        return
+
+    if args.action == "uninstall":
+        cmd_uninstall()
+        return
+
     if args.install_rules:
         cmd_install_rules()
         return
@@ -191,12 +300,16 @@ def main():
         cmd_list_devices()
         return
 
-    if args.daemon:
+    if args.tray or args.action == "tray":
+        from areyoulowbattery.tray import run_tray
+        run_tray()
+        return
+
+    if args.daemon or args.action == "daemon":
         run_daemon_loop()
         return
 
-    engine = BatteryEngine()
-    results = read_from_cache_or_poll(engine, force_poll=args.poll)
+    results = read_from_cache_or_poll(force_poll=args.poll)
 
     if args.format == "json":
         print(format_json_output(results))

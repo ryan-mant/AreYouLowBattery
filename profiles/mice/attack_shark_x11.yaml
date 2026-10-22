@@ -1,0 +1,15 @@
+name: "Attack Shark X11 / R1"
+category: "mouse"
+icon: "🖱️"
+match:
+  vendor_id: "0x1d57"
+  # 0xfa60 = 2.4GHz Wireless Dongle | 0xfa55 = USB-C Wired Mode
+  product_id: ["0xfa60", "0xfa55"]
+  interface_number: 2
+protocol: "compx_v1"
+config:
+  report_id: 0x03
+  battery_offset: 4
+  status_offset: 3
+  listen_timeout: 4.5
+  charging_seconds_per_percent: 75

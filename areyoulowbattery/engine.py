@@ -1,10 +1,34 @@
 import os
 import glob
-from typing import List, Tuple, Optional
+import json
+from typing import List, Tuple, Optional, Dict
 from areyoulowbattery.models import DeviceProfile, BatteryStatus, DeviceCategory, DeviceMatch
 from areyoulowbattery.transport import enumerate_hidraw, HidrawDevice
 from areyoulowbattery.profile_loader import load_all_profiles
 from areyoulowbattery.handlers import get_handler
+
+CUSTOM_NAMES_FILE = os.path.expanduser("~/.config/areyoulowbattery/device_names.json")
+
+
+def load_custom_names() -> Dict[str, str]:
+    try:
+        if os.path.exists(CUSTOM_NAMES_FILE):
+            with open(CUSTOM_NAMES_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_custom_name(key: str, custom_name: str):
+    names = load_custom_names()
+    if custom_name.strip():
+        names[key] = custom_name.strip()
+    else:
+        names.pop(key, None)
+    os.makedirs(os.path.dirname(CUSTOM_NAMES_FILE), exist_ok=True)
+    with open(CUSTOM_NAMES_FILE, "w") as f:
+        json.dump(names, f, indent=2)
 
 
 def _infer_category_and_icon(name: str) -> Tuple[DeviceCategory, str]:
@@ -23,17 +47,40 @@ class BatteryEngine:
         self.profiles = load_all_profiles(profiles_dir)
 
     def find_profile_for_device(self, dev: HidrawDevice) -> Optional[DeviceProfile]:
-        for profile in self.profiles:
-            match = profile.match
-            if match.vendor_id != dev.vendor_id:
-                continue
-            if match.product_ids and dev.product_id not in match.product_ids:
-                continue
-            elif not match.product_ids and match.product_id is not None and match.product_id != dev.product_id:
-                continue
-            if match.interface_number is not None and match.interface_number != dev.interface_number:
-                continue
-            return profile
+        # First pass: exact VID + PID match
+        # Second pass: generic VID-only fallback profile
+        for require_pid in (True, False):
+            for profile in self.profiles:
+                match = profile.match
+                if match.vendor_id != dev.vendor_id:
+                    continue
+                has_pid = bool(match.product_ids or match.product_id is not None)
+                if require_pid != has_pid:
+                    continue
+                if match.product_ids and dev.product_id not in match.product_ids:
+                    continue
+                elif not match.product_ids and match.product_id is not None and match.product_id != dev.product_id:
+                    continue
+                if match.interface_number is not None and match.interface_number != dev.interface_number:
+                    continue
+                base_name = (
+                    dev.name.strip()
+                    if (not has_pid and dev.name and dev.name != "Unknown")
+                    else profile.name
+                )
+                custom_names = load_custom_names()
+                vid_key = f"{dev.vendor_id:04x}:{dev.product_id:04x}"
+                final_name = custom_names.get(vid_key) or custom_names.get(base_name) or base_name
+                if final_name != profile.name:
+                    return DeviceProfile(
+                        name=final_name,
+                        category=profile.category,
+                        icon=profile.icon,
+                        match=profile.match,
+                        protocol=profile.protocol,
+                        config=profile.config,
+                    )
+                return profile
         return None
 
     def _poll_sysfs_peripheral_batteries(self, seen_names: set) -> List[Tuple[DeviceProfile, BatteryStatus]]:

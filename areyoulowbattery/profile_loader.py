@@ -1,8 +1,16 @@
 import os
+import sys
 import glob
 import yaml
 from typing import List, Optional
 from areyoulowbattery.models import DeviceProfile, DeviceMatch, DeviceCategory
+
+
+def get_resource_dir() -> str:
+    """Returns base directory for bundled resources (supports PyInstaller _MEIPASS)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def parse_int_or_hex(val) -> Optional[int]:
     if val is None:
@@ -63,13 +71,20 @@ def load_profile(file_path: str) -> Optional[DeviceProfile]:
         return None
 
 def load_all_profiles(profiles_dir: Optional[str] = None) -> List[DeviceProfile]:
-    if profiles_dir is None:
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        profiles_dir = os.path.join(base_dir, "profiles")
-        
+    search_dirs = []
+    if profiles_dir is not None:
+        search_dirs.append(profiles_dir)
+    else:
+        # User custom profiles override/extend bundled profiles
+        user_profiles = os.path.expanduser("~/.config/areyoulowbattery/profiles")
+        if os.path.isdir(user_profiles):
+            search_dirs.append(user_profiles)
+        search_dirs.append(os.path.join(get_resource_dir(), "profiles"))
+
     profiles = []
-    for yaml_path in glob.glob(f"{profiles_dir}/**/*.yaml", recursive=True):
-        p = load_profile(yaml_path)
-        if p:
-            profiles.append(p)
+    for d in search_dirs:
+        for yaml_path in sorted(glob.glob(f"{d}/**/*.yaml", recursive=True)):
+            p = load_profile(yaml_path)
+            if p:
+                profiles.append(p)
     return profiles
