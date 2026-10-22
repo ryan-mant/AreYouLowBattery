@@ -26,16 +26,17 @@ if sys.platform != "win32":
 
 
 class HidrawDevice:
-    def __init__(self, dev_path: str, vendor_id: int, product_id: int, interface_number: Optional[int], name: str):
+    def __init__(self, dev_path: str, vendor_id: int, product_id: int, interface_number: Optional[int], name: str, usage_page: Optional[int] = None):
         self.dev_path = dev_path
         self.vendor_id = vendor_id
         self.product_id = product_id
         self.interface_number = interface_number
         self.name = name
+        self.usage_page = usage_page
 
     def __repr__(self) -> str:
         return (f"<HidrawDevice {self.dev_path} {hex(self.vendor_id)}:{hex(self.product_id)} "
-                f"iface={self.interface_number} name='{self.name}'>")
+                f"iface={self.interface_number} page={hex(self.usage_page) if self.usage_page else None} name='{self.name}'>")
 
 
 def enumerate_hidraw() -> List[HidrawDevice]:
@@ -49,6 +50,7 @@ def enumerate_hidraw() -> List[HidrawDevice]:
                 dev_path = raw_path.decode('utf-8', errors='ignore') if isinstance(raw_path, bytes) else str(raw_path)
                 vid = d.get('vendor_id', 0)
                 pid = d.get('product_id', 0)
+                upage = d.get('usage_page', None)
                 iface = d.get('interface_number', None)
                 if iface is None or iface == -1:
                     lower_path = dev_path.lower()
@@ -59,7 +61,10 @@ def enumerate_hidraw() -> List[HidrawDevice]:
                         except Exception:
                             pass
                 name = d.get('product_string') or "Unknown"
-                devices.append(HidrawDevice(dev_path, vid, pid, iface, name))
+                devices.append(HidrawDevice(dev_path, vid, pid, iface, name, usage_page=upage))
+
+            # On Windows, sort so vendor collections (usage_page >= 0xFF00) come before standard collections
+            devices.sort(key=lambda x: (x.usage_page or 0) >= 0xFF00, reverse=True)
             return devices
         except ImportError:
             return []

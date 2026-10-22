@@ -140,6 +140,14 @@ class CompXHandler(BaseProtocolHandler):
                     pkt = rx
                     break
 
+            if pkt is None and sys.platform == "win32":
+                try:
+                    feat = transport.get_feature_report(0x08, 17)
+                    if feat and len(feat) >= 8 and (feat[0] in (0x08, 0x09)) and feat[1] == 0x04:
+                        pkt = feat
+                except Exception:
+                    pass
+
         if pkt is None or (pkt[5] == 0 and pkt[6] == 0 and pkt[7] == 0):
             if cached and cached.get("percentage") is not None:
                 age = int(time.time() - cached["timestamp"])

@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import json
 from typing import List, Tuple, Optional, Dict
@@ -93,6 +94,10 @@ class BatteryEngine:
                     continue
                 if match.interface_number is not None and match.interface_number != dev.interface_number:
                     continue
+                if sys.platform == "win32" and dev.usage_page is not None:
+                    # CompX vendor telemetry on Windows lives on vendor usage pages (>= 0xFF00)
+                    if profile.protocol == "compx_v1" and dev.usage_page < 0xFF00:
+                        continue
                 base_name = (
                     dev.name.strip()
                     if (not has_pid and dev.name and dev.name != "Unknown")
