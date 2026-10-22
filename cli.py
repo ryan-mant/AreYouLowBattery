@@ -325,11 +325,19 @@ def cmd_uninstall():
 
 def cmd_list_devices():
     devices = enumerate_hidraw()
-    print("=== Connected HIDRaw Devices ===")
+    print("=== Connected HID Devices ===")
     for dev in devices:
-        print(f"Path: {dev.dev_path:<16} ID: {hex(dev.vendor_id)}:{hex(dev.product_id):<8} Iface: {dev.interface_number} Name: {dev.name}")
+        upage_str = f" Page: {hex(dev.usage_page)}" if dev.usage_page else ""
+        print(f"Path: {dev.dev_path:<16} ID: {hex(dev.vendor_id)}:{hex(dev.product_id):<8} Iface: {dev.interface_number}{upage_str} Name: {dev.name}")
 
 def main():
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.AttachConsole(-1)
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(
         prog="areyoulowbattery",
         description="Lightweight battery reader for wireless peripherals (mice, headsets, keyboards) on Linux."

@@ -1,10 +1,10 @@
-name: "Ajazz AJ199"
+name: "CompX 2.4G Gaming Mouse"
 category: "mouse"
 icon: "🖱️"
 match:
   vendor_id: "0x25a7"
   # 0xfa7b = USB-C Wired Mode, 0xfa7c = 2.4GHz Wireless Dongle
-  # Used by Ajazz (AJ199, AJ139 Pro, AJ159), Attack Shark (X3, X6), Pulsar (X2), VXE (R1/F1), Lamzu
+  # Used by Thunderobot (ML701/ML702/ML903), Ajazz (AJ199/AJ139/AJ159), Attack Shark (X3/X6), Pulsar, Lamzu, VXE
   product_id:
     - "0xfa7b"
     - "0xfa7c"

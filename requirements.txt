@@ -1,0 +1,3 @@
+PyYAML>=6.0
+PySide6>=6.5.0
+hidapi>=0.14.0
