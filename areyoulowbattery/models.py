@@ -6,7 +6,17 @@ class DeviceCategory(str, Enum):
     MOUSE = "mouse"
     HEADSET = "headset"
     KEYBOARD = "keyboard"
+    GAMEPAD = "gamepad"
     OTHER = "other"
+
+
+CATEGORY_ICONS = {
+    DeviceCategory.MOUSE: "🖱️",
+    DeviceCategory.KEYBOARD: "⌨️",
+    DeviceCategory.HEADSET: "🎧",
+    DeviceCategory.GAMEPAD: "🎮",
+    DeviceCategory.OTHER: "🔋",
+}
 
 @dataclass
 class BatteryStatus:

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import os
 import sys
+import glob
 import json
 import time
 import shutil
+import tempfile
 import argparse
 import subprocess
 from typing import List, Tuple
@@ -16,7 +18,8 @@ from areyoulowbattery.transport import enumerate_hidraw
 from areyoulowbattery.profile_loader import get_resource_dir
 from areyoulowbattery.models import DeviceProfile, BatteryStatus, DeviceCategory, DeviceMatch
 
-CACHE_FILE = "/dev/shm/areyoulowbattery_status.json"
+CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
+CACHE_FILE = os.path.join(CACHE_DIR, "areyoulowbattery_status.json")
 
 def format_text_output(results: List[Tuple[DeviceProfile, BatteryStatus]], show_all: bool = False) -> str:
     if not results:
@@ -155,7 +158,29 @@ def cmd_install_rules():
 
 
 def cmd_install():
-    """Automated one-step installer: udev rules + systemd user service + System Tray."""
+    """Automated one-step installer: udev rules + systemd user service on Linux, Startup on Windows."""
+    if sys.platform == "win32":
+        print("=== Installing AreYouLowBattery for Windows ===")
+        startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
+        if os.path.exists(startup_dir):
+            bat_path = os.path.join(startup_dir, "AreYouLowBattery.bat")
+            with open(bat_path, "w") as f:
+                if getattr(sys, "frozen", False):
+                    exe_path = os.path.realpath(sys.executable)
+                    f.write(f'@start "" "{exe_path}" --tray\n')
+                else:
+                    script = os.path.abspath(__file__)
+                    f.write(f'@start "" "{sys.executable}" "{script}" --tray\n')
+            print(f"[1/2] Created startup shortcut in {bat_path}")
+
+        print("[2/2] Starting AreYouLowBattery in System Tray...")
+        if getattr(sys, "frozen", False):
+            subprocess.Popen([os.path.realpath(sys.executable), "--tray"])
+        else:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "--tray"])
+        print("\n✅ Done! The battery icon is now active in your Windows System Tray.")
+        return
+
     print("=== Installing AreYouLowBattery ===")
     rules_src = os.path.join(get_resource_dir(), "rules", "99-areyoulowbattery.rules")
     rules_dst = "/etc/udev/rules.d/99-areyoulowbattery.rules"
@@ -219,6 +244,33 @@ WantedBy=default.target
 
 
 def cmd_uninstall():
+    if sys.platform == "win32":
+        print("=== Uninstalling AreYouLowBattery for Windows ===")
+        startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
+        bat_path = os.path.join(startup_dir, "AreYouLowBattery.bat")
+        if os.path.exists(bat_path):
+            try:
+                os.remove(bat_path)
+                print(f"[1/3] Removed startup shortcut {bat_path}")
+            except OSError:
+                pass
+
+        config_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "areyoulowbattery")
+        if os.path.exists(config_dir):
+            shutil.rmtree(config_dir, ignore_errors=True)
+            print(f"[2/3] Removed {config_dir}")
+
+        for f in glob.glob(os.path.join(CACHE_DIR, "areyoulowbattery*")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+        print("[3/3] Stopping running processes...")
+        subprocess.run(["taskkill", "/F", "/IM", "areyoulowbattery.exe"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("\n✅ AreYouLowBattery was completely uninstalled.")
+        return
+
     print("=== Uninstalling AreYouLowBattery ===")
 
     # 1. Stop and disable systemd user service
@@ -247,7 +299,7 @@ def cmd_uninstall():
         shutil.rmtree(config_dir, ignore_errors=True)
         print(f"  Removed {config_dir}")
 
-    for f in glob.glob("/dev/shm/areyoulowbattery*"):
+    for f in glob.glob(os.path.join(CACHE_DIR, "areyoulowbattery*")):
         try:
             os.remove(f)
         except OSError:

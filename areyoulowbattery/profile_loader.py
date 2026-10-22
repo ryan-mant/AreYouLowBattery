@@ -76,14 +76,19 @@ def load_all_profiles(profiles_dir: Optional[str] = None) -> List[DeviceProfile]
         search_dirs.append(profiles_dir)
     else:
         # User custom profiles override/extend bundled profiles
-        user_profiles = os.path.expanduser("~/.config/areyoulowbattery/profiles")
+        config_base = (
+            os.environ.get("LOCALAPPDATA")
+            if sys.platform == "win32"
+            else os.path.expanduser("~/.config")
+        ) or os.path.expanduser("~/.config")
+        user_profiles = os.path.join(config_base, "areyoulowbattery", "profiles")
         if os.path.isdir(user_profiles):
             search_dirs.append(user_profiles)
         search_dirs.append(os.path.join(get_resource_dir(), "profiles"))
 
     profiles = []
     for d in search_dirs:
-        for yaml_path in sorted(glob.glob(f"{d}/**/*.yaml", recursive=True)):
+        for yaml_path in sorted(glob.glob(os.path.join(d, "**", "*.yaml"), recursive=True)):
             p = load_profile(yaml_path)
             if p:
                 profiles.append(p)

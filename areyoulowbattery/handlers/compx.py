@@ -1,12 +1,14 @@
 import os
+import sys
 import json
 import time
+import tempfile
 from typing import Optional
 from areyoulowbattery.models import BatteryStatus, DeviceProfile
 from areyoulowbattery.transport import HidrawDevice, HidrawTransport
 from areyoulowbattery.handlers.base import BaseProtocolHandler
 
-CACHE_DIR = "/dev/shm"
+CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
 CACHE_TTL = 3600  # seconds a cached reading is still considered valid
 WIRED_BASE_MAX_AGE = 300  # max age (5 min) of a pre-cable wireless reading to trust as wired charge base
 
@@ -87,10 +89,14 @@ class CompXHandler(BaseProtocolHandler):
         return b""
 
     def _has_feature_08_descriptor(self, dev: HidrawDevice) -> bool:
+        if sys.platform == "win32":
+            return dev.vendor_id == 0x25a7 and dev.interface_number in (1, None)
         desc = self._get_report_descriptor(dev)
         return b"\x85\x08" in desc and b"\x85\x09" in desc
 
     def _has_vendor_03_descriptor(self, dev: HidrawDevice) -> bool:
+        if sys.platform == "win32":
+            return dev.vendor_id == 0x1d57 and dev.interface_number in (2, None)
         desc = self._get_report_descriptor(dev)
         return b"\x06\x00\xff" in desc and b"\x85\x03" in desc
 

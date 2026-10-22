@@ -34,14 +34,22 @@ Works out-of-the-box with **KDE Plasma**, **GNOME**, **XFCE**, **Hyprland / Sway
 
 ### Option A: Standalone Executable (from GitHub Releases)
 
-Download `areyoulowbattery` from the **[Releases](../../releases)** page and run:
+#### Linux:
+Download `areyoulowbattery-linux-x86_64` (or `areyoulowbattery`) from the **[Releases](../../releases)** page and run:
 
 ```bash
 chmod +x areyoulowbattery
 ./areyoulowbattery install
 ```
-
 That's it! It configures `udev` rules, installs the binary to `~/.local/bin/areyoulowbattery`, starts the `systemd --user` service, and shows the battery icon in your System Tray.
+
+#### Windows:
+Download `areyoulowbattery-windows-x64.exe` (or `areyoulowbattery.exe`) from the **[Releases](../../releases)** page:
+1. Double-click to start, or run in PowerShell/CMD:
+   ```cmd
+   areyoulowbattery.exe install
+   ```
+2. The battery icon will appear right next to the Windows clock in your Taskbar Tray, and will automatically start with Windows!
 
 ### 🗑️ Clean Uninstallation
 

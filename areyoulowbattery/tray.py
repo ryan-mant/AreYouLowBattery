@@ -2,13 +2,15 @@ import os
 import sys
 import json
 import time
+import tempfile
 import threading
 from typing import List, Tuple, Optional
 
 from areyoulowbattery.engine import BatteryEngine
 from areyoulowbattery.models import DeviceProfile, BatteryStatus
 
-CACHE_FILE = "/dev/shm/areyoulowbattery_status.json"
+CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
+CACHE_FILE = os.path.join(CACHE_DIR, "areyoulowbattery_status.json")
 
 
 def _pick_color(pct: Optional[int], is_charging: bool, is_connected: bool) -> str:
@@ -158,7 +160,8 @@ def run_tray():
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog
     from PySide6.QtGui import QCursor, QAction
     from PySide6.QtCore import Signal, QObject
-    from areyoulowbattery.engine import save_custom_name
+    from areyoulowbattery.engine import save_custom_name, save_custom_category
+    from areyoulowbattery.models import CATEGORY_ICONS, DeviceCategory
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -172,7 +175,8 @@ def run_tray():
     status_action = menu.addAction("Reading battery...")
     status_action.setEnabled(False)
     sep_action = menu.addSeparator()
-    rename_menu = menu.addMenu("Rename device...")
+    rename_action = menu.addAction("Rename device...")
+    type_action = menu.addAction("Change device type...")
     refresh_action = menu.addAction("Refresh now")
     menu.addSeparator()
     uninstall_action = menu.addAction("Uninstall...")
@@ -180,6 +184,80 @@ def run_tray():
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(menu)
     tray.show()
+
+    current_supported_devices: List[Tuple[DeviceProfile, BatteryStatus]] = []
+
+    def prompt_rename():
+        if not current_supported_devices:
+            return
+        if len(current_supported_devices) == 1:
+            dev_name = current_supported_devices[0][0].name
+        else:
+            dev_names = [f"{p.icon} {p.name}" for p, _ in current_supported_devices]
+            choice, ok = QInputDialog.getItem(
+                None, "Rename Device", "Select device to rename:", dev_names, 0, False
+            )
+            if not ok or not choice:
+                return
+            idx = dev_names.index(choice)
+            dev_name = current_supported_devices[idx][0].name
+
+        new_name, ok = QInputDialog.getText(
+            None,
+            "Rename Device",
+            f"New name for '{dev_name}':",
+            text=dev_name,
+        )
+        if ok and new_name.strip():
+            save_custom_name(dev_name, new_name.strip())
+            wake_event.set()
+
+    def prompt_change_type():
+        if not current_supported_devices:
+            return
+        if len(current_supported_devices) == 1:
+            prof = current_supported_devices[0][0]
+        else:
+            dev_names = [f"{p.icon} {p.name}" for p, _ in current_supported_devices]
+            choice, ok = QInputDialog.getItem(
+                None, "Change Device Type", "Select device:", dev_names, 0, False
+            )
+            if not ok or not choice:
+                return
+            idx = dev_names.index(choice)
+            prof = current_supported_devices[idx][0]
+
+        type_options = [
+            ("🖱️ Mouse", "mouse", "🖱️"),
+            ("⌨️ Keyboard", "keyboard", "⌨️"),
+            ("🎧 Headset", "headset", "🎧"),
+            ("🎮 Gamepad", "gamepad", "🎮"),
+            ("🔋 Other", "other", "🔋"),
+        ]
+        labels = [item[0] for item in type_options]
+        current_idx = 0
+        for i, item in enumerate(type_options):
+            if item[1] == prof.category.value:
+                current_idx = i
+                break
+
+        choice, ok = QInputDialog.getItem(
+            None,
+            "Change Device Type",
+            f"Select new type for '{prof.name}':",
+            labels,
+            current_idx,
+            False,
+        )
+        if ok and choice:
+            for lbl, cat, ico in type_options:
+                if lbl == choice:
+                    save_custom_category(prof.name, cat, ico)
+                    wake_event.set()
+                    break
+
+    rename_action.triggered.connect(prompt_rename)
+    type_action.triggered.connect(prompt_change_type)
 
     def prompt_uninstall():
         from PySide6.QtWidgets import QMessageBox
@@ -192,6 +270,25 @@ def run_tray():
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
+            if sys.platform == "win32":
+                startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
+                bat_path = os.path.join(startup_dir, "AreYouLowBattery.bat")
+                if os.path.exists(bat_path):
+                    try:
+                        os.remove(bat_path)
+                    except OSError:
+                        pass
+                config_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "areyoulowbattery")
+                if os.path.exists(config_dir):
+                    shutil.rmtree(config_dir, ignore_errors=True)
+                for f in glob.glob(os.path.join(CACHE_DIR, "areyoulowbattery*")):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+                app.quit()
+                return
+
             subprocess.run(["systemctl", "--user", "stop", "areyoulowbattery.service"], check=False)
             subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=False)
             service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
@@ -210,7 +307,7 @@ def run_tray():
             config_dir = os.path.expanduser("~/.config/areyoulowbattery")
             if os.path.exists(config_dir):
                 shutil.rmtree(config_dir, ignore_errors=True)
-            for f in glob.glob("/dev/shm/areyoulowbattery*"):
+            for f in glob.glob(os.path.join(CACHE_DIR, "areyoulowbattery*")):
                 try:
                     os.remove(f)
                 except OSError:
@@ -233,17 +330,6 @@ def run_tray():
     stop_event = threading.Event()
     wake_event = threading.Event()
     dynamic_actions = []
-
-    def prompt_rename(current_name: str):
-        new_name, ok = QInputDialog.getText(
-            None,
-            "Rename Device",
-            f"New name for '{current_name}':",
-            text=current_name,
-        )
-        if ok and new_name.strip():
-            save_custom_name(current_name, new_name.strip())
-            wake_event.set()
 
     def write_cache(results: List[Tuple[DeviceProfile, BatteryStatus]]):
         tmp_file = CACHE_FILE + ".tmp"
@@ -281,20 +367,21 @@ def run_tray():
             wake_event.clear()
 
     def on_updated(results: List[Tuple[DeviceProfile, BatteryStatus]]):
-        nonlocal dynamic_actions
-        for act in dynamic_actions:
-            menu.removeAction(act)
-        dynamic_actions.clear()
-        rename_menu.clear()
-
+        nonlocal current_supported_devices, dynamic_actions
         supported = [(p, s) for p, s in results if s.supported]
+        current_supported_devices = supported
+
         if not supported:
             tray.setIcon(_render_tray_icon(None, False, False))
             tray.setToolTip("AreYouLowBattery: No supported device active")
             status_action.setVisible(True)
             status_action.setText("No active device")
+            rename_action.setEnabled(False)
+            type_action.setEnabled(False)
             return
 
+        rename_action.setEnabled(True)
+        type_action.setEnabled(True)
         status_action.setVisible(False)
 
         # Prefer connected devices over disconnected ones for the primary tray icon
@@ -309,20 +396,22 @@ def run_tray():
                 primary_stat.is_connected,
             ))
 
-        tooltip_lines = []
-        for prof, stat in supported:
-            line = _format_device_line(prof, stat)
-            tooltip_lines.append(line)
+        tooltip_lines = [_format_device_line(prof, stat) for prof, stat in supported]
+        tray.setToolTip("\n".join(tooltip_lines))
 
+        # Do not rebuild or touch the menu if the user currently has it open!
+        if menu.isVisible():
+            return
+
+        for act in dynamic_actions:
+            menu.removeAction(act)
+        dynamic_actions.clear()
+
+        for line in tooltip_lines:
             act = QAction(line, menu)
             act.setEnabled(False)
             menu.insertAction(sep_action, act)
             dynamic_actions.append(act)
-
-            ren_act = rename_menu.addAction(f"{prof.icon} {prof.name}")
-            ren_act.triggered.connect(lambda checked=False, n=prof.name: prompt_rename(n))
-
-        tray.setToolTip("\n".join(tooltip_lines))
 
     updater.updated.connect(on_updated)
     refresh_action.triggered.connect(lambda: wake_event.set())
