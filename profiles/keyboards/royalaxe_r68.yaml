@@ -1,0 +1,9 @@
+name: "Royalaxe R68"
+category: "keyboard"
+icon: "⌨️"
+match:
+  vendor_id: "0x25a7"
+  product_id: "0x2420"
+  interface_number: 1
+protocol: "compx_v1"
+config: {}

@@ -76,16 +76,23 @@ class CompXHandler(BaseProtocolHandler):
                 return pkt
         return None
 
-    def _has_feature_08_descriptor(self, dev: HidrawDevice) -> bool:
+    def _get_report_descriptor(self, dev: HidrawDevice) -> bytes:
         try:
             hid_name = os.path.basename(dev.dev_path)
             desc_path = f"/sys/class/hidraw/{hid_name}/device/report_descriptor"
             if os.path.exists(desc_path):
-                desc = open(desc_path, "rb").read()
-                return b"\x85\x08" in desc and b"\x85\x09" in desc
+                return open(desc_path, "rb").read()
         except Exception:
             pass
-        return False
+        return b""
+
+    def _has_feature_08_descriptor(self, dev: HidrawDevice) -> bool:
+        desc = self._get_report_descriptor(dev)
+        return b"\x85\x08" in desc and b"\x85\x09" in desc
+
+    def _has_vendor_03_descriptor(self, dev: HidrawDevice) -> bool:
+        desc = self._get_report_descriptor(dev)
+        return b"\x06\x00\xff" in desc and b"\x85\x03" in desc
 
     def _read_feature_08_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> BatteryStatus:
         """
@@ -181,6 +188,14 @@ class CompXHandler(BaseProtocolHandler):
         cfg = profile.config
         if cfg.get("feature_report_id") == 0x08 or self._has_feature_08_descriptor(dev):
             return self._read_feature_08_battery(dev, profile)
+
+        if not self._has_vendor_03_descriptor(dev):
+            return BatteryStatus(
+                0,
+                is_connected=True,
+                supported=False,
+                details="2.4GHz receiver does not expose a CompX battery telemetry report (Bluetooth only)",
+            )
 
         batt_offset = cfg.get("battery_offset", 4)
         status_offset = cfg.get("status_offset", 3)

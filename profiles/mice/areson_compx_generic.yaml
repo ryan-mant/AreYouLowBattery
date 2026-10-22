@@ -7,5 +7,4 @@ match:
   interface_number: 1
 protocol: "compx_v1"
 config:
-  feature_report_id: 0x08
   report_id: 0x09
