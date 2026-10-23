@@ -94,10 +94,6 @@ class BatteryEngine:
                     continue
                 if match.interface_number is not None and match.interface_number != dev.interface_number:
                     continue
-                if sys.platform == "win32" and dev.usage_page is not None:
-                    # CompX vendor telemetry on Windows lives on vendor usage pages (>= 0xFF00)
-                    if profile.protocol == "compx_v1" and dev.usage_page < 0xFF00:
-                        continue
                 base_name = (
                     dev.name.strip()
                     if (not has_pid and dev.name and dev.name != "Unknown")
@@ -195,27 +191,43 @@ class BatteryEngine:
     def poll_all_devices(self) -> List[Tuple[DeviceProfile, BatteryStatus]]:
         connected_hid = enumerate_hidraw()
         results = []
-        matched_profiles = set()
 
+        # Group candidate HID nodes by matched profile name
+        # This allows multiple collections/endpoints of the same device on Windows
+        # to be queried until an active, connected telemetry packet is received.
+        candidates: Dict[str, List[Tuple[DeviceProfile, HidrawDevice]]] = {}
         for dev in connected_hid:
             profile = self.find_profile_for_device(dev)
-            if not profile or profile.name in matched_profiles:
-                continue
+            if profile:
+                candidates.setdefault(profile.name, []).append((profile, dev))
 
-            try:
-                handler = get_handler(profile.protocol)
-                status = handler.read_battery(dev, profile)
-                if status:
-                    results.append((profile, status))
-                    matched_profiles.add(profile.name)
-            except Exception as e:
-                status = BatteryStatus(
-                    percentage=0,
-                    is_connected=False,
-                    details=f"Handler error: {e}"
-                )
-                results.append((profile, status))
-                matched_profiles.add(profile.name)
+        matched_profiles = set()
+        for name, dev_list in candidates.items():
+            best_profile = None
+            best_status = None
+            for profile, dev in dev_list:
+                try:
+                    handler = get_handler(profile.protocol)
+                    status = handler.read_battery(dev, profile)
+                    if status and status.is_connected:
+                        best_profile = profile
+                        best_status = status
+                        break
+                    elif status and (best_status is None or not best_status.is_connected):
+                        best_profile = profile
+                        best_status = status
+                except Exception as e:
+                    if best_status is None:
+                        best_profile = profile
+                        best_status = BatteryStatus(
+                            percentage=0,
+                            is_connected=False,
+                            details=f"Handler error: {e}"
+                        )
+
+            if best_profile and best_status:
+                results.append((best_profile, best_status))
+                matched_profiles.add(best_profile.name)
 
         results.extend(self._poll_sysfs_peripheral_batteries(matched_profiles))
         return results

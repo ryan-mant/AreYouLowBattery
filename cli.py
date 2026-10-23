@@ -326,15 +326,24 @@ def cmd_uninstall():
 def cmd_list_devices():
     devices = enumerate_hidraw()
     print("=== Connected HID Devices ===")
+    if not devices:
+        print("No HID devices detected.")
     for dev in devices:
         upage_str = f" Page: {hex(dev.usage_page)}" if dev.usage_page else ""
         print(f"Path: {dev.dev_path:<16} ID: {hex(dev.vendor_id)}:{hex(dev.product_id):<8} Iface: {dev.interface_number}{upage_str} Name: {dev.name}")
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 def main():
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.kernel32.AttachConsole(-1)
+            # Attach to the caller's console if run from CMD/PowerShell
+            if ctypes.windll.kernel32.AttachConsole(-1):
+                sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+                sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
         except Exception:
             pass
 
@@ -427,6 +436,11 @@ def main():
         print(format_full_output(results))
     else:
         print(format_text_output(results, show_all=args.all))
+
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     try:

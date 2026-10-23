@@ -55,7 +55,7 @@ jobs:
       - name: Build executable (Windows)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --onefile --windowed --name areyoulowbattery --add-data "profiles;profiles" cli.py
+          pyinstaller --onefile --windowed --name areyoulowbattery --add-data "profiles;profiles" --hidden-import hid cli.py
           Copy-Item dist\areyoulowbattery.exe dist\areyoulowbattery-windows-x64.exe
 
       - name: Upload build artifacts

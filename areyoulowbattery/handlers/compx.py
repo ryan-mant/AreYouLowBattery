@@ -76,6 +76,7 @@ class CompXHandler(BaseProtocolHandler):
             )
             if pkt and pkt[0] == report_id and len(pkt) >= 5 and pkt[2] in (0x40, 0x41):
                 return pkt
+            time.sleep(0.02)
         return None
 
     def _get_report_descriptor(self, dev: HidrawDevice) -> bytes:
@@ -136,9 +137,10 @@ class CompXHandler(BaseProtocolHandler):
                     length=64,
                     timeout_sec=min(0.15, max(0.01, deadline - time.time()))
                 )
-                if rx and len(rx) >= 8 and rx[0] == 0x09 and rx[1] == 0x04 and rx[2] == 0x00:
+                if rx and len(rx) >= 8 and rx[0] == 0x09 and rx[1] == 0x04:
                     pkt = rx
                     break
+                time.sleep(0.02)
 
             if pkt is None and sys.platform == "win32":
                 try:

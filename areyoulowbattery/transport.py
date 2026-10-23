@@ -66,7 +66,7 @@ def enumerate_hidraw() -> List[HidrawDevice]:
             # On Windows, sort so vendor collections (usage_page >= 0xFF00) come before standard collections
             devices.sort(key=lambda x: (x.usage_page or 0) >= 0xFF00, reverse=True)
             return devices
-        except ImportError:
+        except (ImportError, Exception):
             return []
 
     devices = []
@@ -127,7 +127,10 @@ class HidrawTransport:
             self._hid_device = hid.device()
             path_bytes = self.dev_path.encode('utf-8') if isinstance(self.dev_path, str) else self.dev_path
             self._hid_device.open_path(path_bytes)
-            self._hid_device.set_nonblocking(True)
+            # Note: Do NOT call set_nonblocking(True) here.
+            # In hidapi, read(..., timeout_ms) requires standard blocking mode
+            # to honor timeout_ms via WaitForSingleObject. Non-blocking mode
+            # causes read() to return immediately with 0 bytes.
             return
 
         if self._fd is None:
