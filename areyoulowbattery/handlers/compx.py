@@ -128,10 +128,14 @@ class CompXHandler(BaseProtocolHandler):
             req[16] = 0x49  # (0x55 - (0x08 + 0x04)) & 0xFF
             try:
                 transport.send_feature_report(bytes(req))
-            except OSError as e:
-                return BatteryStatus(0, is_connected=False, details=f"Feature 0x08 query failed: {e}")
+            except OSError:
+                try:
+                    # Fallback to write output report if feature report ioctl/hidapi fails
+                    transport.write_output_report(bytes(req))
+                except OSError as e:
+                    return BatteryStatus(0, is_connected=False, details=f"Feature 0x08 query failed: {e}")
 
-            deadline = time.time() + 0.4
+            deadline = time.time() + 0.6
             while time.time() < deadline:
                 rx = transport.read_input_report(
                     length=64,
@@ -143,14 +147,16 @@ class CompXHandler(BaseProtocolHandler):
                 time.sleep(0.02)
 
             if pkt is None and sys.platform == "win32":
-                try:
-                    feat = transport.get_feature_report(0x08, 17)
-                    if feat and len(feat) >= 8 and (feat[0] in (0x08, 0x09)) and feat[1] == 0x04:
-                        pkt = feat
-                except Exception:
-                    pass
+                for rid in (0x09, 0x08):
+                    try:
+                        feat = transport.get_feature_report(rid, 17)
+                        if feat and len(feat) >= 8 and (feat[0] in (0x08, 0x09)) and feat[1] == 0x04:
+                            pkt = feat
+                            break
+                    except Exception:
+                        pass
 
-        if pkt is None or (pkt[5] == 0 and pkt[6] == 0 and pkt[7] == 0):
+        if pkt is None:
             if cached and cached.get("percentage") is not None:
                 age = int(time.time() - cached["timestamp"])
                 return BatteryStatus(
@@ -159,7 +165,18 @@ class CompXHandler(BaseProtocolHandler):
                     is_connected=True,
                     details=f"Cached ({age}s ago, mouse asleep)"
                 )
-            return BatteryStatus(0, is_connected=False, details="Mouse asleep or turned off")
+            return BatteryStatus(0, is_connected=False, details="No response from dongle (timeout)")
+
+        if len(pkt) > 7 and pkt[5] == 0 and pkt[6] == 0 and pkt[7] == 0:
+            if cached and cached.get("percentage") is not None:
+                age = int(time.time() - cached["timestamp"])
+                return BatteryStatus(
+                    cached["percentage"],
+                    is_charging=cached.get("is_charging", False),
+                    is_connected=True,
+                    details=f"Cached ({age}s ago, mouse asleep)"
+                )
+            return BatteryStatus(0, is_connected=False, details="Mouse in standby/sleep mode (move mouse to wake)")
 
         percentage = max(0, min(100, pkt[6]))
         is_charging = bool(pkt[7])

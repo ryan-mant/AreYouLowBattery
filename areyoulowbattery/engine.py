@@ -92,8 +92,9 @@ class BatteryEngine:
                     continue
                 elif not match.product_ids and match.product_id is not None and match.product_id != dev.product_id:
                     continue
-                if match.interface_number is not None and match.interface_number != dev.interface_number:
-                    continue
+                if match.interface_number is not None:
+                    if dev.interface_number is not None and match.interface_number != dev.interface_number:
+                        continue
                 base_name = (
                     dev.name.strip()
                     if (not has_pid and dev.name and dev.name != "Unknown")
