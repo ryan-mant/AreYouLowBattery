@@ -109,52 +109,65 @@ class CompXHandler(BaseProtocolHandler):
           - Reads 17-byte Input Report 0x09:
             [0x09, 0x04, <status>, 0x00, 0x00, <level>, <battery_pct>, <is_charging>, ..., <checksum>]
         """
-        transport = HidrawTransport(dev.dev_path, read_only=False)
-        try:
-            transport.open()
-        except PermissionError:
-            return BatteryStatus(0, is_connected=False,
-                                 details="Permission denied. Please install udev rules.")
-        except OSError as e:
-            return BatteryStatus(0, is_connected=False, details=f"Failed to open device: {e}")
-
         cached = self._read_cache(profile)
+
+        # On Windows, composite USB peripherals are exposed as multiple Top-Level Collection nodes.
+        # Feature Report 0x08 and Input Report 0x09 may belong to different collection handles.
+        # Query across candidate nodes of this physical peripheral until a telemetry packet is returned.
+        candidates = [dev]
+        if sys.platform == "win32":
+            all_devs = enumerate_hidraw()
+            siblings = [
+                d for d in all_devs
+                if d.vendor_id == dev.vendor_id and d.product_id == dev.product_id and d.dev_path != dev.dev_path
+            ]
+            candidates.extend(siblings)
+
         pkt = None
+        req = bytearray(17)
+        req[0] = 0x08
+        req[1] = 0x04
+        req[16] = 0x49  # (0x55 - (0x08 + 0x04)) & 0xFF
 
-        with transport:
-            req = bytearray(17)
-            req[0] = 0x08
-            req[1] = 0x04
-            req[16] = 0x49  # (0x55 - (0x08 + 0x04)) & 0xFF
+        for candidate in candidates:
+            transport = HidrawTransport(candidate.dev_path, read_only=False)
             try:
-                transport.send_feature_report(bytes(req))
-            except OSError:
+                transport.open()
+            except Exception:
+                continue
+
+            with transport:
                 try:
-                    # Fallback to write output report if feature report ioctl/hidapi fails
-                    transport.write_output_report(bytes(req))
-                except OSError as e:
-                    return BatteryStatus(0, is_connected=False, details=f"Feature 0x08 query failed: {e}")
-
-            deadline = time.time() + 0.6
-            while time.time() < deadline:
-                rx = transport.read_input_report(
-                    length=64,
-                    timeout_sec=min(0.15, max(0.01, deadline - time.time()))
-                )
-                if rx and len(rx) >= 8 and rx[0] == 0x09 and rx[1] == 0x04:
-                    pkt = rx
-                    break
-                time.sleep(0.02)
-
-            if pkt is None and sys.platform == "win32":
-                for rid in (0x09, 0x08):
+                    transport.send_feature_report(bytes(req))
+                except Exception:
                     try:
-                        feat = transport.get_feature_report(rid, 17)
-                        if feat and len(feat) >= 8 and (feat[0] in (0x08, 0x09)) and feat[1] == 0x04:
-                            pkt = feat
-                            break
+                        transport.write_output_report(bytes(req))
                     except Exception:
                         pass
+
+                deadline = time.time() + 0.35
+                while time.time() < deadline:
+                    rx = transport.read_input_report(
+                        length=64,
+                        timeout_sec=min(0.12, max(0.01, deadline - time.time()))
+                    )
+                    if rx and len(rx) >= 8 and rx[0] == 0x09 and rx[1] == 0x04:
+                        pkt = rx
+                        break
+                    time.sleep(0.01)
+
+                if pkt is None and sys.platform == "win32":
+                    for rid in (0x09, 0x08):
+                        try:
+                            feat = transport.get_feature_report(rid, 17)
+                            if feat and len(feat) >= 8 and (feat[0] in (0x08, 0x09)) and feat[1] == 0x04:
+                                pkt = feat
+                                break
+                        except Exception:
+                            pass
+
+            if pkt and not (len(pkt) > 7 and pkt[5] == 0 and pkt[6] == 0 and pkt[7] == 0):
+                break
 
         if pkt is None:
             if cached and cached.get("percentage") is not None:
