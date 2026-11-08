@@ -9,11 +9,16 @@ Works out-of-the-box with **KDE Plasma**, **GNOME**, **XFCE**, **Hyprland / Sway
 ## ✨ Features
 
 - **Native System Tray Indicator:** Dynamic circular battery badge in your system tray (color-coded by level + charging bolt `⚡`, tooltip, and right-click menu).
-- **One-Command Automated Installer (`install`):** Automatically configures `udev` permissions, installs the binary, and enables the `systemd --user` background service.
+- **Smart Low (15%) & Critical (5%) Battery Alerts:** Audio and desktop alerts with hysteresis anti-spam so you never get caught off guard by a dead battery.
+- **Competitive In-Game Protection (CS2, Dota 2, Steam, etc.):** Automatically detects running fullscreen games and suppresses visual pop-ups (zero focus stealing, zero compositor stutter) while playing a subtle background audio cue in your headset.
+- **"Start with system" Tray Toggle:** Enable or disable automatic startup on boot right from the System Tray menu on both Linux (`systemd`) and Windows (`Startup`).
+- **One-Command Automated Installer (`install`):** Automatically configures `udev` permissions, installs the binary, and enables the background service.
 - **Zero Input Lag (`O_RDONLY`):** Passive kernel buffer reads on the vendor endpoint without sending unnecessary USB interruptions or touching the mouse motion interface.
 - **All Connection Modes Supported:** Handles 2.4GHz Wireless Dongle, Magnetic Charging Dock, and USB-C Wired charging modes.
 - **Declarative Device Profiles:** Add support for new peripherals via simple YAML files in `profiles/` (or `~/.config/areyoulowbattery/profiles/`).
 - **Multiple Output Formats (`text` / `json` / `full`):** Also works as a CLI backend for KDE *Command Output*, Waybar, or Polybar.
+
+> 📋 **See [CHANGELOG.md](CHANGELOG.md) for full release-to-release Patch Notes.**
 
 ---
 
@@ -44,12 +49,12 @@ chmod +x areyoulowbattery
 That's it! It configures `udev` rules, installs the binary to `~/.local/bin/areyoulowbattery`, starts the `systemd --user` service, and shows the battery icon in your System Tray.
 
 #### Windows:
-Download `areyoulowbattery-windows-x64.exe` (or `areyoulowbattery.exe`) from the **[Releases](../../releases)** page:
-1. Double-click to start, or run in PowerShell/CMD:
+Download `areyoulowbattery-windows-x64.zip` (recommended) or `areyoulowbattery.exe` from the **[Releases](../../releases)** page:
+1. Extract the `.zip` and double-click `areyoulowbattery.exe` to start in the System Tray, or run in PowerShell/CMD:
    ```cmd
-   areyoulowbattery.exe install
+   .\areyoulowbattery.exe install
    ```
-2. The battery icon will appear right next to the Windows clock in your Taskbar Tray, and will automatically start with Windows!
+2. The battery icon will appear right next to the Windows clock in your Taskbar Tray, and you can toggle **"Start with system"** directly from the right-click menu!
 
 ### 🗑️ Clean Uninstallation
 

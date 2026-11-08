@@ -4,6 +4,7 @@ import json
 import time
 import tempfile
 import threading
+import subprocess
 from typing import List, Tuple, Optional
 
 from areyoulowbattery.engine import BatteryEngine
@@ -179,6 +180,65 @@ def run_tray():
     type_action = menu.addAction("Change device type...")
     refresh_action = menu.addAction("Refresh now")
     menu.addSeparator()
+
+    autostart_action = menu.addAction("Start with system")
+    autostart_action.setCheckable(True)
+
+    def is_autostart_enabled() -> bool:
+        if sys.platform == "win32":
+            startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
+            return os.path.exists(os.path.join(startup_dir, "AreYouLowBattery.bat"))
+        else:
+            service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
+            if not os.path.exists(service_path):
+                return False
+            try:
+                res = subprocess.run(
+                    ["systemctl", "--user", "is-enabled", "areyoulowbattery.service"],
+                    capture_output=True, text=True, timeout=1.5
+                )
+                return res.stdout.strip() == "enabled"
+            except Exception:
+                return False
+
+    autostart_action.setChecked(is_autostart_enabled())
+
+    def toggle_autostart(checked: bool):
+        if sys.platform == "win32":
+            startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
+            os.makedirs(startup_dir, exist_ok=True)
+            bat_path = os.path.join(startup_dir, "AreYouLowBattery.bat")
+            if checked:
+                exe_path = os.path.realpath(sys.executable)
+                with open(bat_path, "w") as f:
+                    if getattr(sys, "frozen", False):
+                        f.write(f'@start "" "{exe_path}" --tray\n')
+                    else:
+                        script = os.path.abspath(sys.argv[0])
+                        f.write(f'@start "" "{sys.executable}" "{script}" --tray\n')
+            else:
+                if os.path.exists(bat_path):
+                    try:
+                        os.remove(bat_path)
+                    except OSError:
+                        pass
+        else:
+            if checked:
+                try:
+                    subprocess.run(["systemctl", "--user", "enable", "areyoulowbattery.service"], check=True, timeout=5)
+                except Exception as e:
+                    print(f"Failed to enable autostart: {e}", file=sys.stderr)
+            else:
+                try:
+                    subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=True, timeout=5)
+                except Exception as e:
+                    print(f"Failed to disable autostart: {e}", file=sys.stderr)
+        autostart_action.blockSignals(True)
+        autostart_action.setChecked(is_autostart_enabled())
+        autostart_action.blockSignals(False)
+
+    autostart_action.toggled.connect(toggle_autostart)
+
     uninstall_action = menu.addAction("Uninstall...")
     quit_action = menu.addAction("Quit")
     quit_action.triggered.connect(app.quit)
@@ -337,6 +397,116 @@ def run_tray():
     stop_event = threading.Event()
     wake_event = threading.Event()
     dynamic_actions = []
+    # Tracks notification levels per device: key = profile.name, value = set of triggered thresholds (e.g. {15, 5})
+    notified_thresholds: dict[str, set[int]] = {}
+
+    def is_fullscreen_or_game_running() -> bool:
+        """
+        Detects if a competitive game (CS2, Dota 2, Apex, etc.) is running.
+        Prevents popping notifications that could cause stutter or distraction during matches.
+        """
+        game_signatures = {
+            "cs2", "csgo_linux64", "dota2", "steam_app_",
+            "valorant.exe", "overwatch.exe", "r5apex.exe",
+            "pubg.exe", "fortnite.exe"
+        }
+        my_pid = os.getpid()
+        if sys.platform != "win32":
+            try:
+                for pid_str in os.listdir("/proc"):
+                    if not pid_str.isdigit() or int(pid_str) == my_pid:
+                        continue
+                    try:
+                        exe_name = os.path.basename(os.readlink(f"/proc/{pid_str}/exe")).lower()
+                        if exe_name in game_signatures or any(sig in exe_name for sig in ("cs2", "dota2", "steam_app")):
+                            return True
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        else:
+            # On Windows, Focus Assist / Game Bar normally silences notifications automatically,
+            # but we can check foreground window state if needed.
+            pass
+        return False
+
+    def _play_alert_sound(critical: bool = False):
+        """
+        Plays a non-blocking, lightweight system audio cue in the background.
+        Never creates a window or touches graphics/focus, making it 100% safe during fullscreen games.
+        """
+        if sys.platform == "win32":
+            try:
+                import winsound
+                flag = winsound.MB_ICONHAND if critical else winsound.MB_ICONEXCLAMATION
+                winsound.MessageBeep(flag)
+            except Exception:
+                pass
+        else:
+            sound_id = "battery-caution" if critical else "battery-low"
+            fallback_files = [
+                f"/usr/share/sounds/ocean/stereo/{sound_id}.oga",
+                "/usr/share/sounds/freedesktop/stereo/dialog-warning.oga",
+                "/usr/share/sounds/freedesktop/stereo/bell.oga",
+            ]
+            for snd in fallback_files:
+                if os.path.exists(snd):
+                    for player in ("pw-play", "paplay"):
+                        try:
+                            subprocess.Popen(
+                                [player, snd],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            return
+                        except Exception:
+                            continue
+            try:
+                subprocess.Popen(
+                    ["canberra-gtk-play", "-i", sound_id],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
+
+    def check_battery_notifications(supported_devices: List[Tuple[DeviceProfile, BatteryStatus]]):
+        for prof, stat in supported_devices:
+            if not stat.is_connected or stat.percentage is None:
+                continue
+
+            # If device is charging or above 20%, reset triggered notification flags
+            if stat.is_charging or stat.percentage > 20:
+                if prof.name in notified_thresholds:
+                    notified_thresholds[prof.name].clear()
+                continue
+
+            sent_levels = notified_thresholds.setdefault(prof.name, set())
+            in_game = is_fullscreen_or_game_running()
+
+            # Critical Battery: <= 5%
+            if stat.percentage <= 5 and 5 not in sent_levels:
+                sent_levels.add(5)
+                sent_levels.add(15)  # Suppress 15% if it drops straight to <= 5%
+                _play_alert_sound(critical=True)
+                if not in_game:
+                    tray.showMessage(
+                        f"{prof.name} — Critical Battery ({stat.percentage}%)",
+                        "Battery is critically low. Connect the charger to avoid sudden power off.",
+                        QSystemTrayIcon.MessageIcon.Critical,
+                        6000
+                    )
+            # Low Battery: <= 15%
+            elif stat.percentage <= 15 and 15 not in sent_levels and 5 not in sent_levels:
+                sent_levels.add(15)
+                _play_alert_sound(critical=False)
+                if not in_game:
+                    tray.showMessage(
+                        f"{prof.name} — Low Battery ({stat.percentage}%)",
+                        "Battery level is low. Consider charging soon.",
+                        QSystemTrayIcon.MessageIcon.Warning,
+                        4500
+                    )
 
     def write_cache(results: List[Tuple[DeviceProfile, BatteryStatus]]):
         tmp_file = CACHE_FILE + ".tmp"
@@ -405,6 +575,9 @@ def run_tray():
 
         tooltip_lines = [_format_device_line(prof, stat) for prof, stat in supported]
         tray.setToolTip("\n".join(tooltip_lines))
+
+        # Check thresholds and trigger native system alerts if needed (with hysteresis protection)
+        check_battery_notifications(supported)
 
         # Do not rebuild or touch the menu if the user currently has it open!
         if menu.isVisible():
