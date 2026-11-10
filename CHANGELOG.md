@@ -4,6 +4,17 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.4.1] — 2026-11-10 — Windows Multi-Collection RX/TX Fix & Draggable Dashboard
+
+### 🐛 Bug Fixes & UI Polish
+- **Windows Simultaneous Vendor Collection Listening (`compx_v1` & `nordic_v1`):**
+  - Fixed `Disconnected / Deep Sleep` on Windows for CompX 1K (`0x25a7`) and Nordic (`0x3554`) mice where Feature Report `0x08` (TX) lives on `UsagePage 0xFF02` while Input Report `0x09` (RX) arrives on `UsagePage 0xFF01`. All vendor sibling handles are now kept open simultaneously before transmitting `0x08` so `hid.dll` buffers the incoming `0x09` packet on `0xFF01`.
+- **Draggable Mini-Dashboard & Pill-Rounded Battery Bars (`areyoulowbattery/popup.py`):**
+  - Made the Mini-Dashboard flyout window draggable across the screen (`startSystemMove` + mouse drag fallback).
+  - Replaced default Qt `QProgressBar` with a custom antialiased `RoundedBatteryBar` for smooth pill-shaped corners across all desktop themes.
+
+---
+
 ## [v0.4.0] — 2026-11-10 — Mini-Dashboard Popup, Instant Hotplug & New Protocols
 
 ### ✨ New Features

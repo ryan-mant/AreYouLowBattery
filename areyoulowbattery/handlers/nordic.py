@@ -79,7 +79,12 @@ class NordicHandler(BaseProtocolHandler):
             all_devs = enumerate_hidraw()
             siblings = [
                 d for d in all_devs
-                if d.vendor_id == dev.vendor_id and d.product_id == dev.product_id and d.dev_path != dev.dev_path
+                if (
+                    d.vendor_id == dev.vendor_id
+                    and d.product_id == dev.product_id
+                    and d.dev_path != dev.dev_path
+                    and (d.usage_page is None or d.usage_page >= 0xFF00)
+                )
             ]
             candidates.extend(siblings)
 
@@ -90,35 +95,45 @@ class NordicHandler(BaseProtocolHandler):
         req[16] = 0x49
 
         pkt = None
-        for candidate in candidates:
-            transport = HidrawTransport(candidate.dev_path, read_only=False)
-            try:
-                transport.open()
-            except Exception:
-                continue
-
-            with transport:
+        open_transports = []
+        try:
+            for candidate in candidates:
+                t = HidrawTransport(candidate.dev_path, read_only=False)
                 try:
-                    transport.send_feature_report(bytes(req))
+                    t.open()
+                    open_transports.append(t)
+                except Exception as e:
+                    logger.debug("Could not open Nordic candidate %s: %s", candidate.dev_path, e)
+
+            if not open_transports:
+                return BatteryStatus(0, is_connected=False, details="Failed to open HID vendor interface")
+
+            for t in open_transports:
+                try:
+                    t.send_feature_report(bytes(req))
                 except Exception:
                     try:
-                        transport.write_output_report(bytes(req))
+                        t.write_output_report(bytes(req))
                     except Exception:
                         pass
 
-                deadline = time.time() + 0.35
-                while time.time() < deadline:
-                    rx = transport.read_input_report(
+            deadline = time.time() + 0.45
+            per_handle_timeout = 0.04 if len(open_transports) > 1 else 0.12
+            while time.time() < deadline and pkt is None:
+                for t in open_transports:
+                    rx = t.read_input_report(
                         length=64,
-                        timeout_sec=min(0.12, max(0.01, deadline - time.time()))
+                        timeout_sec=min(per_handle_timeout, max(0.01, deadline - time.time()))
                     )
                     if rx and len(rx) >= 8 and rx[0] in (0x08, 0x09) and rx[1] in (0x04, 0x07):
-                        pkt = rx
-                        break
-                    time.sleep(0.01)
-
-            if pkt and not (pkt[5] == 0 and pkt[6] == 0 and pkt[7] == 0):
-                break
+                        if not (rx[5] == 0 and rx[6] == 0 and rx[7] == 0):
+                            pkt = rx
+                            break
+                        elif pkt is None:
+                            pkt = rx
+        finally:
+            for t in open_transports:
+                t.close()
 
         if pkt is None or (len(pkt) > 7 and pkt[5] == 0 and pkt[6] == 0 and pkt[7] == 0):
             if cached and cached.get("percentage") is not None:

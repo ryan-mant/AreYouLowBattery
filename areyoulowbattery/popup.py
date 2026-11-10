@@ -1,10 +1,10 @@
 from typing import List, Tuple, Callable, Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QFrame, QApplication, QMenu
+    QFrame, QApplication, QMenu
 )
-from PySide6.QtCore import Qt, QPoint, QEvent
-from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtCore import Qt, QPoint, QEvent, QRectF
+from PySide6.QtGui import QCursor, QGuiApplication, QPainter, QColor, QPainterPath
 
 from areyoulowbattery.models import DeviceProfile, BatteryStatus
 
@@ -21,6 +21,36 @@ def _pick_accent_color(pct: Optional[int], is_charging: bool, is_connected: bool
     if pct <= 40:
         return "#facc15"  # yellow
     return "#4ade80"      # green
+
+
+class RoundedBatteryBar(QWidget):
+    """Custom antialiased pill-shaped progress bar for crisp rounded corners on all themes."""
+
+    def __init__(self, value: int, color_hex: str, parent=None):
+        super().__init__(parent)
+        self._value = max(0, min(100, value))
+        self._color = QColor(color_hex)
+        self._bg_color = QColor("#0f172a")
+        self.setFixedHeight(8)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = float(self.width())
+        h = float(self.height())
+        radius = h / 2.0
+
+        track_path = QPainterPath()
+        track_path.addRoundedRect(QRectF(0.0, 0.0, w, h), radius, radius)
+        painter.fillPath(track_path, self._bg_color)
+
+        if self._value > 0:
+            fill_w = max(h, w * (self._value / 100.0))
+            painter.setClipPath(track_path)
+            fill_path = QPainterPath()
+            fill_path.addRoundedRect(QRectF(0.0, 0.0, fill_w, h), radius, radius)
+            painter.fillPath(fill_path, self._color)
+        painter.end()
 
 
 class DeviceCard(QFrame):
@@ -41,17 +71,6 @@ class DeviceCard(QFrame):
                 background: transparent;
                 border: none;
                 color: #f8fafc;
-            }}
-            QProgressBar {{
-                background-color: #0f172a;
-                border: none;
-                border-radius: 4px;
-                height: 8px;
-                text-align: center;
-            }}
-            QProgressBar::chunk {{
-                background-color: {accent};
-                border-radius: 4px;
             }}
         """)
 
@@ -81,17 +100,14 @@ class DeviceCard(QFrame):
 
         layout.addLayout(top_row)
 
-        # Middle row: Progress bar
-        bar = QProgressBar()
-        bar.setRange(0, 100)
-        bar.setTextVisible(False)
-        bar.setFixedHeight(7)
+        # Middle row: Pill-shaped antialiased progress bar
         if not status.is_connected:
-            bar.setValue(0)
+            bar_val = 0
         elif status.percentage is not None:
-            bar.setValue(max(0, min(100, status.percentage)))
+            bar_val = max(0, min(100, status.percentage))
         else:
-            bar.setValue(100 if status.is_charging else 0)
+            bar_val = 100 if status.is_charging else 0
+        bar = RoundedBatteryBar(bar_val, accent, self)
         layout.addWidget(bar)
 
         # Bottom row: Status text on left, Protocol/Mode on right
@@ -313,6 +329,30 @@ class BatteryPopup(QWidget):
         if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
             if not self._context_menu.isVisible():
                 self.hide()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            wh = self.windowHandle()
+            if wh is not None:
+                try:
+                    wh.startSystemMove()
+                except Exception:
+                    pass
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton and getattr(self, "_drag_offset", None) is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
