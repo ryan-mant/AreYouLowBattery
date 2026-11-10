@@ -42,22 +42,19 @@ Works out-of-the-box with **KDE Plasma**, **GNOME**, **XFCE**, **Hyprland / Sway
 
 ### Option A: Standalone Executable (from GitHub Releases)
 
-#### Linux:
+#### Linux (Ubuntu 22.04+, Debian 12+, Fedora, Arch, Mint, Pop!_OS):
 Download `areyoulowbattery-linux-x86_64` (or `areyoulowbattery`) from the **[Releases](../../releases)** page and run:
 
 ```bash
 chmod +x areyoulowbattery
 ./areyoulowbattery install
 ```
-That's it! It configures `udev` rules, installs the binary to `~/.local/bin/areyoulowbattery`, starts the `systemd --user` service, and shows the battery icon in your System Tray.
+That's it! It configures `udev` rules, installs the binary to `~/.local/bin/areyoulowbattery`, starts the `systemd --user` service, and shows the battery icon in your System Tray (no Python installation required).
 
-#### Windows:
-Download `areyoulowbattery-windows-x64.zip` (recommended) or `areyoulowbattery.exe` from the **[Releases](../../releases)** page:
-1. Extract the `.zip` and double-click `areyoulowbattery.exe` to start in the System Tray, or run in PowerShell/CMD:
-   ```cmd
-   .\areyoulowbattery.exe install
-   ```
-2. The battery icon will appear right next to the Windows clock in your Taskbar Tray, and you can toggle **"Start with system"** directly from the right-click menu!
+#### Windows 10 & 11 (x64):
+Download **`AreYouLowBattery-Windows-Setup.exe`** (recommended installer) or `areyoulowbattery-windows-x64.zip` (portable folder) from the **[Releases](../../releases)** page:
+1. Run **`AreYouLowBattery-Windows-Setup.exe`** (or extract the `.zip` and double-click `areyoulowbattery.exe`).
+2. The battery icon will appear right next to the Windows clock in your Taskbar Tray, and you can toggle **"Start with system"** or **"Export diagnostic log..."** directly from the right-click menu!
 
 ### 🗑️ Clean Uninstallation
 

@@ -4,6 +4,20 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.4.2] — 2026-11-10 — Windows Inno Setup Installer, Universal Linux Build & Diagnostic Exporter
+
+### ✨ New Features & Packaging
+- **Windows Inno Setup Installer (`AreYouLowBattery-Windows-Setup.exe`) & `--onedir` Build:**
+  - Switched Windows packaging from `--onefile` to `--onedir` + native **Inno Setup** installer (`installer.iss`). Eliminates `%TEMP%` self-extraction on launch (preventing Windows Defender `Wacatac.B!ml` false positives and speeding up startup by 5x).
+- **Universal Linux Binary Compatibility (`ubuntu-22.04` / `glibc 2.35`):**
+  - Built Linux standalone binaries on `ubuntu-22.04` so `areyoulowbattery-linux-x86_64` runs out-of-the-box across Debian 12+, Ubuntu 22.04+, Linux Mint 21+, Pop!_OS, Fedora, Arch, and Manjaro.
+- **1-Click Diagnostic Log Exporter (`Export diagnostic log...` & `--diag`):**
+  - Added **"Export diagnostic log..."** in the System Tray menu (and `areyoulowbattery --diag` in CLI) to export a full USB HID enumeration and protocol trace to `Desktop/areyoulowbattery_diag.txt` for easy troubleshooting.
+- **Enhanced Logitech HID++ 2.0 Support (G Pro X Superlight 2):**
+  - Added support for 20-byte Long HID++ (`0x11`) reports, `0x1001` millivolt battery curve fallback, and multi-collection `0xFF00`/`0xFF43` scanning for Logitech Lightspeed 2K/4K/8K receivers.
+
+---
+
 ## [v0.4.1] — 2026-11-10 — Windows Multi-Collection RX/TX Fix & Draggable Dashboard
 
 ### 🐛 Bug Fixes & UI Polish
