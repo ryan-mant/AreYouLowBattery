@@ -79,12 +79,19 @@ class CompXHandler(BaseProtocolHandler):
             time.sleep(0.02)
         return None
 
+    _desc_cache: dict = {}
+
     def _get_report_descriptor(self, dev: HidrawDevice) -> bytes:
+        key = (dev.dev_path, dev.vendor_id, dev.product_id)
+        if key in self._desc_cache:
+            return self._desc_cache[key]
         try:
             hid_name = os.path.basename(dev.dev_path)
             desc_path = f"/sys/class/hidraw/{hid_name}/device/report_descriptor"
             if os.path.exists(desc_path):
-                return open(desc_path, "rb").read()
+                data = open(desc_path, "rb").read()
+                self._desc_cache[key] = data
+                return data
         except Exception:
             pass
         return b""
@@ -191,24 +198,54 @@ class CompXHandler(BaseProtocolHandler):
                 )
             return BatteryStatus(0, is_connected=False, details="Mouse in standby/sleep mode (move mouse to wake)")
 
-        percentage = max(0, min(100, pkt[6]))
+        level_bar = pkt[5]
+        raw_pct = max(0, min(100, pkt[6]))
         is_charging = bool(pkt[7])
         raw_hex = pkt.hex()
+        now = time.time()
+        secs_per_pct = profile.config.get("charging_seconds_per_percent", 75)
 
         # When the mouse reaches 100% on the cable (Green LED), the charger IC cuts off
         # and reports [0x64, 0x00] (100%, not charging), but periodically pulses a brief
         # trickle top-off [0x5f, 0x01] (95%, charging) as voltage relaxes by ~10mV.
         # Once 100% cutoff is reached, latch at 100% across trickle top-off pulses.
         full_latched = bool(cached.get("full_latched", False)) if cached else False
-        if percentage == 100 and not is_charging:
+        if raw_pct == 100 and not is_charging:
             full_latched = True
-        elif full_latched and is_charging and percentage >= 95:
-            percentage = 100
+        elif full_latched and is_charging and raw_pct >= 95:
+            raw_pct = 100
             is_charging = False
         else:
             full_latched = False
 
-        secs_per_pct = profile.config.get("charging_seconds_per_percent", 75)
+        # On CompX 1K / Areson mice (0x25a7, e.g. Ajazz AJ199), the MCU has no fuel-gauge IC
+        # and reads battery voltage via an ADC divider. As soon as the 5V USB-C cable is plugged in
+        # (is_charging == True), the charger rail pulls terminal voltage to ~4.15V (reporting 0x5f = 95%
+        # or 0x0a = 10% placeholder) even if the cell was at 75%.
+        # Just like on the Delux M900 Pro, lock onto the pre-charge wireless reading (charge_base)
+        # and interpolate smoothly over time until the hardware charger cuts off at 100%.
+        charge_start = cached.get("charge_start") if cached else None
+        charge_base = cached.get("charge_base") if cached else None
+        last_wireless_pct = cached.get("last_wireless_pct") if cached else None
+
+        if is_charging:
+            if charge_base is None or charge_start is None:
+                if last_wireless_pct is not None and 0 < last_wireless_pct < 100:
+                    charge_base = last_wireless_pct
+                elif raw_pct not in (10, 95, 100) and 0 < raw_pct < 100:
+                    charge_base = raw_pct
+                else:
+                    charge_base = {1: 45, 2: 75, 3: 90}.get(level_bar, 75)
+                charge_start = now
+            elapsed = max(0.0, now - charge_start)
+            estimated_gain = int(elapsed // secs_per_pct)
+            percentage = min(99, charge_base + estimated_gain)
+        else:
+            percentage = raw_pct
+            last_wireless_pct = raw_pct
+            charge_start = None
+            charge_base = None
+
         eta_seconds = (
             max(60, int((100 - percentage) * secs_per_pct))
             if (is_charging and percentage < 100)
@@ -218,6 +255,9 @@ class CompXHandler(BaseProtocolHandler):
         self._write_cache(profile, {
             "percentage": percentage,
             "is_charging": is_charging,
+            "charge_start": charge_start,
+            "charge_base": charge_base,
+            "last_wireless_pct": last_wireless_pct,
             "full_latched": full_latched,
             "eta_seconds": eta_seconds,
             "raw": raw_hex,

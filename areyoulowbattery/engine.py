@@ -213,7 +213,8 @@ class BatteryEngine:
                     if status and status.is_connected:
                         best_profile = profile
                         best_status = status
-                        break
+                        if not status.details.startswith("Cached"):
+                            break
                     elif status and (best_status is None or not best_status.is_connected):
                         best_profile = profile
                         best_status = status

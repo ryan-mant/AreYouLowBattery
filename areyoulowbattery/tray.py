@@ -383,9 +383,15 @@ def run_tray():
 
     uninstall_action.triggered.connect(prompt_uninstall)
 
+    stop_event = threading.Event()
+    wake_event = threading.Event()
+
+    from areyoulowbattery.popup import BatteryPopup
+    popup = BatteryPopup(on_refresh=lambda: wake_event.set(), context_menu=menu)
+
     def on_tray_activated(reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            menu.popup(QCursor.pos())
+            popup.toggle_at_cursor()
 
     tray.activated.connect(on_tray_activated)
 
@@ -394,8 +400,6 @@ def run_tray():
 
     updater = Updater()
     engine = BatteryEngine()
-    stop_event = threading.Event()
-    wake_event = threading.Event()
     dynamic_actions = []
     # Tracks notification levels per device: key = profile.name, value = set of triggered thresholds (e.g. {15, 5})
     notified_thresholds: dict[str, set[int]] = {}
@@ -532,6 +536,48 @@ def run_tray():
         except Exception:
             pass
 
+    def hotplug_watcher():
+        """
+        Watches for USB HID / power_supply hotplug events (plugging/unplugging cable or dongle)
+        and immediately wakes the polling worker without waiting for the 10s routine interval.
+        """
+        from areyoulowbattery.transport import get_hid_topology_signature
+
+        if sys.platform != "win32":
+            try:
+                proc = subprocess.Popen(
+                    [
+                        "udevadm", "monitor", "--udev",
+                        "--subsystem-match=hidraw",
+                        "--subsystem-match=power_supply",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1,
+                )
+                for line in proc.stdout:
+                    if stop_event.is_set():
+                        break
+                    if any(act in line for act in (" add ", " remove ", " change ")):
+                        # Brief debounce so udev 0666 permissions settle on new /dev/hidraw nodes
+                        time.sleep(0.25)
+                        wake_event.set()
+                proc.terminate()
+                return
+            except Exception:
+                pass
+
+        # Fallback (Windows or Linux without udevadm): compare lightweight topology signature
+        last_sig = get_hid_topology_signature()
+        while not stop_event.is_set():
+            time.sleep(1.5)
+            cur_sig = get_hid_topology_signature()
+            if cur_sig != last_sig:
+                last_sig = cur_sig
+                time.sleep(0.2)
+                wake_event.set()
+
     def worker():
         while not stop_event.is_set():
             try:
@@ -540,13 +586,14 @@ def run_tray():
                 updater.updated.emit(results)
             except Exception as e:
                 print(f"Tray worker error: {e}", file=sys.stderr, flush=True)
-            wake_event.wait(timeout=2.0)
+            wake_event.wait(timeout=10.0)
             wake_event.clear()
 
     def on_updated(results: List[Tuple[DeviceProfile, BatteryStatus]]):
         nonlocal current_supported_devices, dynamic_actions
         supported = [(p, s) for p, s in results if s.supported]
         current_supported_devices = supported
+        popup.update_devices(supported)
 
         if not supported:
             tray.setIcon(_render_tray_icon(None, False, False))
@@ -598,6 +645,9 @@ def run_tray():
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+
+    hotplug_thread = threading.Thread(target=hotplug_watcher, daemon=True)
+    hotplug_thread.start()
 
     try:
         sys.exit(app.exec())

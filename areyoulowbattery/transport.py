@@ -39,8 +39,42 @@ class HidrawDevice:
                 f"iface={self.interface_number} page={hex(self.usage_page) if self.usage_page else None} name='{self.name}'>")
 
 
+_CACHED_TOPOLOGY_SIG: Optional[tuple] = None
+_CACHED_DEVICES: List[HidrawDevice] = []
+
+
+def get_hid_topology_signature() -> tuple:
+    """
+    Returns a lightweight signature of connected HID nodes without opening devices
+    or parsing sysfs files. Changes immediately whenever a USB device is plugged/unplugged.
+    """
+    if sys.platform == "win32":
+        try:
+            import hid
+            return tuple(sorted(
+                (d.get("vendor_id", 0), d.get("product_id", 0), d.get("path", b""))
+                for d in hid.enumerate()
+            ))
+        except Exception:
+            return ()
+    sig = []
+    for p in sorted(glob.glob("/dev/hidraw*")):
+        try:
+            st = os.stat(p)
+            sig.append((p, st.st_ino, st.st_rdev))
+        except OSError:
+            pass
+    return tuple(sig)
+
+
 def enumerate_hidraw() -> List[HidrawDevice]:
-    """Scans connected HID devices (via hidapi on Windows, sysfs /dev/hidraw on Linux)."""
+    """Scans connected HID devices (via hidapi on Windows, sysfs /dev/hidraw on Linux) with topology caching."""
+    global _CACHED_TOPOLOGY_SIG, _CACHED_DEVICES
+
+    current_sig = get_hid_topology_signature()
+    if current_sig and current_sig == _CACHED_TOPOLOGY_SIG and _CACHED_DEVICES:
+        return list(_CACHED_DEVICES)
+
     if sys.platform == "win32":
         try:
             import hid
@@ -65,7 +99,9 @@ def enumerate_hidraw() -> List[HidrawDevice]:
 
             # On Windows, sort so vendor collections (usage_page >= 0xFF00) come before standard collections
             devices.sort(key=lambda x: (x.usage_page or 0) >= 0xFF00, reverse=True)
-            return devices
+            _CACHED_TOPOLOGY_SIG = current_sig
+            _CACHED_DEVICES = devices
+            return list(devices)
         except (ImportError, Exception):
             return []
 
@@ -110,7 +146,10 @@ def enumerate_hidraw() -> List[HidrawDevice]:
             pass
 
         devices.append(HidrawDevice(dev_path, vid, pid, interface_number, name))
-    return devices
+
+    _CACHED_TOPOLOGY_SIG = current_sig
+    _CACHED_DEVICES = devices
+    return list(devices)
 
 
 class HidrawTransport:
