@@ -410,16 +410,26 @@ def main():
         action="store_true",
         help="Enable verbose debug logging to stderr"
     )
+    parser.add_argument(
+        "--diag",
+        action="store_true",
+        help="Export a full hardware diagnostic report to Desktop and exit"
+    )
 
     args = parser.parse_args()
-    from areyoulowbattery.logger import setup_logging
+    from areyoulowbattery.logger import setup_logging, export_diagnostic_report
     setup_logging(args.debug)
+
+    if args.diag:
+        path = export_diagnostic_report()
+        print(f"Diagnostic report saved to: {path}")
+        return
 
     # When double-clicked in Windows Explorer or launched without CLI arguments, default to Tray mode
     is_cli_query = any(
         arg in sys.argv for arg in [
             "--format", "-f", "--poll", "--list-devices", "--daemon",
-            "--all", "-a", "--install-rules", "--debug", "install", "uninstall", "daemon"
+            "--all", "-a", "--install-rules", "--debug", "--diag", "install", "uninstall", "daemon"
         ]
     )
     if not is_cli_query or args.tray or args.action == "tray":

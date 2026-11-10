@@ -239,6 +239,27 @@ def run_tray():
 
     autostart_action.toggled.connect(toggle_autostart)
 
+    diag_action = menu.addAction("Export diagnostic log...")
+
+    def handle_export_diag():
+        from PySide6.QtWidgets import QMessageBox
+        from areyoulowbattery.logger import export_diagnostic_report
+        try:
+            path = export_diagnostic_report()
+            QMessageBox.information(
+                None,
+                "Diagnostic Log Exported",
+                f"Diagnostic report saved to:\n\n{path}\n\nYou can send this file to help troubleshoot your device.",
+            )
+        except Exception as e:
+            QMessageBox.warning(
+                None,
+                "Diagnostic Error",
+                f"Could not generate diagnostic report:\n{e}",
+            )
+
+    diag_action.triggered.connect(handle_export_diag)
+
     uninstall_action = menu.addAction("Uninstall...")
     quit_action = menu.addAction("Quit")
     quit_action.triggered.connect(app.quit)
