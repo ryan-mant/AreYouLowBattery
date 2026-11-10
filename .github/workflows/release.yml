@@ -14,7 +14,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux
           - os: windows-latest
             platform: windows
@@ -57,12 +57,13 @@ jobs:
           ./dist/areyoulowbattery --help
           cp dist/areyoulowbattery dist/areyoulowbattery-linux-x86_64
 
-      - name: Build executable (Windows)
+      - name: Build executable and Inno Setup installer (Windows)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --onefile --windowed --name areyoulowbattery --icon "assets/icon.ico" --version-file windows_version_info.txt --add-data "profiles;profiles" --add-data "assets;assets" --hidden-import hid cli.py
-          Copy-Item dist\areyoulowbattery.exe dist\areyoulowbattery-windows-x64.exe
-          Compress-Archive -Path dist\areyoulowbattery.exe -DestinationPath dist\areyoulowbattery-windows-x64.zip
+          pyinstaller --onedir --windowed --name areyoulowbattery --icon "assets/icon.ico" --version-file windows_version_info.txt --add-data "profiles;profiles" --add-data "assets;assets" --hidden-import hid cli.py
+          Compress-Archive -Path dist\areyoulowbattery -DestinationPath dist\areyoulowbattery-windows-x64.zip
+          iscc installer.iss
+          Remove-Item -Recurse -Force dist\areyoulowbattery
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -104,8 +105,7 @@ jobs:
           files: |
             release_assets/areyoulowbattery
             release_assets/areyoulowbattery-linux-x86_64
-            release_assets/areyoulowbattery.exe
-            release_assets/areyoulowbattery-windows-x64.exe
+            release_assets/AreYouLowBattery-Windows-Setup.exe
             release_assets/areyoulowbattery-windows-x64.zip
             rules/99-areyoulowbattery.rules
           generate_release_notes: true
