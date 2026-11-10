@@ -1,0 +1,11 @@
+name: "Nordic 4K/8K Wireless Mouse"
+category: "mouse"
+icon: "🖱️"
+match:
+  vendor_id: "0x3554"
+  # Used by VXE Dragonfly R1 Pro / Mad R, ATK F1/X1, Scyrox V8, Lamzu Atlantis/Maya 4K,
+  # Zaopin Z1 Pro / Z2, Ninjutso Sora V2, Darmoshark M3 4K
+  interface_number: 1
+protocol: "nordic_v1"
+config:
+  charging_seconds_per_percent: 75

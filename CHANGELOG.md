@@ -4,6 +4,35 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.4.0] — 2026-11-10 — Mini-Dashboard Popup, Instant Hotplug & New Protocols
+
+### ✨ New Features
+- **Mini-Dashboard Flyout Popup (`areyoulowbattery/popup.py`):**
+  - Left-clicking the System Tray icon now opens a sleek dark-mode flyout dashboard displaying cards for each connected peripheral, color-coded battery progress bars, connection protocol badges, and estimated charging time remaining (`ETA`).
+  - Zero background CPU/GPU overhead: widgets are only built or updated while the popup is visible on screen.
+  - Full Wayland (`kwin_wayland`), X11, and Windows compatibility (`Qt.Tool | Qt.FramelessWindowHint`).
+- **Instant USB Hotplug Detection (`udev` & Topology Watcher):**
+  - Listens passively to kernel `hidraw` and `power_supply` netlink events on Linux (`udevadm monitor`) and HID topology changes on Windows to update the tray icon within **~0.25s** whenever a charging cable or dongle is plugged in or unplugged.
+- **New Peripheral Protocols (`nordic_v1` & `hidpp_v2`):**
+  - **Nordic nRF52840 / Compx 4K & 8K (`0x3554`):** Added support for high-polling 4K/8K wireless mice (VXE R1 Pro / Mad R, ATK F1/X1, Scyrox V8, Lamzu 4K, Zaopin Z1 Pro / Z2, Ninjutso Sora V2, Darmoshark M3 4K).
+  - **Logitech HID++ 2.0 (`0x046d`):** Added direct HID++ 2.0 (`0x1004` Unified Battery / `0x1000` Battery Status) querying for Logitech Lightspeed, Bolt, and Unifying devices (G Pro X Superlight 1 & 2, G502 X, G303, G703, G915), allowing Windows users to monitor battery without Logitech G HUB.
+
+### ⚡ Performance, Security & Bug Fixes
+- **Automated Unit Test Suite (`tests/`):**
+  - Added automated unit tests with simulated HID transports covering YAML profile validation, CompX 8K (`0x03`), CompX 1K (`0x08`/`0x09` + charging interpolation), Nordic 4K/8K, Logitech HID++ 2.0, and cache key isolation, executed automatically in GitHub Actions CI.
+- **Hardened `udev` Security (`MODE="0660", TAG+="uaccess"`):**
+  - Replaced world-writable `MODE="0666"` in `rules/99-areyoulowbattery.rules` with `MODE="0660", TAG+="uaccess"` so `systemd-logind` grants dynamic ACL access exclusively to the active physical session user.
+- **Collision-Free `VID:PID` Cache Keys & `--debug` Logging:**
+  - Scoped device telemetry cache files by `(profile, vendor_id, product_id)` to prevent cache collisions across multiple generic devices while preserving shared `charge_base` state across wired/wireless PIDs of dual-mode mice.
+  - Added structured diagnostic logging (`areyoulowbattery/logger.py`, `--debug` / `AREYOULOWBATTERY_DEBUG=1`).
+- **HID Topology & Report Descriptor Caching:**
+  - Cached `/dev/hidraw*` inode signatures and sysfs report descriptors in memory, reducing routine polling interval from `2s` to `10s` in both Tray and CLI `--daemon` modes (80% fewer background USB/RF queries).
+- **CompX 1K (`0x25a7`) Smooth Charging Interpolation & Live Priority:**
+  - Fixed voltage-under-charge jumps (`0x0a` / `0x5f`) on CompX 1K mice (e.g. Ajazz AJ199) when plugging in the USB-C cable by locking onto the pre-charge wireless reading (`charge_base`) and interpolating smoothly until full cutoff.
+  - Prioritized live telemetry reports over cached readings when both the 2.4GHz dongle and USB-C cable are connected simultaneously.
+
+---
+
 ## [v0.3.0] — 2026-11-08 — Smart Alerts, In-Game Mode & Autostart Control
 
 ### ✨ New Features

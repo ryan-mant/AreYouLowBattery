@@ -82,11 +82,14 @@ def format_full_output(results: List[Tuple[DeviceProfile, BatteryStatus]]) -> st
         lines.append("-" * 32)
     return "\n".join(lines)
 
-def run_daemon_loop():
+def run_daemon_loop(poll_interval: float = 10.0):
     """Lightweight background daemon that monitors events and keeps /dev/shm cache fresh."""
+    from areyoulowbattery.transport import get_hid_topology_signature
+
     print("Starting AreYouLowBattery daemon (caching to /dev/shm)...", flush=True)
     engine = BatteryEngine()
     tmp_file = CACHE_FILE + ".tmp"
+    last_sig = get_hid_topology_signature()
 
     while True:
         try:
@@ -102,6 +105,7 @@ def run_daemon_loop():
                     "is_charging": status.is_charging,
                     "is_connected": status.is_connected,
                     "supported": status.supported,
+                    "eta_seconds": status.eta_seconds,
                     "details": status.details,
                     "timestamp": time.time()
                 })
@@ -111,7 +115,15 @@ def run_daemon_loop():
         except Exception as e:
             print(f"Daemon error: {e}", file=sys.stderr, flush=True)
 
-        time.sleep(1)
+        # Sleep up to poll_interval seconds, waking early if USB HID topology changes
+        deadline = time.time() + poll_interval
+        while time.time() < deadline:
+            time.sleep(1.0)
+            cur_sig = get_hid_topology_signature()
+            if cur_sig != last_sig:
+                last_sig = cur_sig
+                time.sleep(0.2)
+                break
 
 def read_from_cache_or_poll(force_poll: bool = False) -> List[Tuple[DeviceProfile, BatteryStatus]]:
     # Only trust the daemon cache if it was refreshed recently (daemon is alive)
@@ -393,14 +405,21 @@ def main():
         action="store_true",
         help="Show instructions to install udev rules for non-root access"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose debug logging to stderr"
+    )
 
     args = parser.parse_args()
+    from areyoulowbattery.logger import setup_logging
+    setup_logging(args.debug)
 
     # When double-clicked in Windows Explorer or launched without CLI arguments, default to Tray mode
     is_cli_query = any(
         arg in sys.argv for arg in [
             "--format", "-f", "--poll", "--list-devices", "--daemon",
-            "--all", "-a", "--install-rules", "install", "uninstall", "daemon"
+            "--all", "-a", "--install-rules", "--debug", "install", "uninstall", "daemon"
         ]
     )
     if not is_cli_query or args.tray or args.action == "tray":

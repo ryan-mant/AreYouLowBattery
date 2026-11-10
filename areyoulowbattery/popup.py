@@ -122,6 +122,8 @@ class DeviceCard(QFrame):
 
         proto_map = {
             "compx_v1": "2.4G / USB",
+            "nordic_v1": "4K/8K RF",
+            "hidpp_v2": "Lightspeed",
             "sysfs_power_supply": "System / BT",
         }
         proto_badge = proto_map.get(profile.protocol, profile.protocol)

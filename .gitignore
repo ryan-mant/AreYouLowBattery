@@ -7,3 +7,7 @@ build/
 .venv/
 venv/
 captures/
+.idea/
+.vscode/
+.pytest_cache/
+*.spec

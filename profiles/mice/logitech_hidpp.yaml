@@ -1,0 +1,9 @@
+name: "Logitech Lightspeed Peripheral"
+category: "mouse"
+icon: "🖱️"
+match:
+  vendor_id: "0x046d"
+  # Logitech Lightspeed, PRO X Superlight 1/2, G502 X, G303, G703, G915, Bolt, Unifying
+  interface_number: 2
+protocol: "hidpp_v2"
+config: {}

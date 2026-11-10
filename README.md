@@ -8,9 +8,10 @@ Works out-of-the-box with **KDE Plasma**, **GNOME**, **XFCE**, **Hyprland / Sway
 
 ## ✨ Features
 
-- **Native System Tray Indicator:** Dynamic circular battery badge in your system tray (color-coded by level + charging bolt `⚡`, tooltip, and right-click menu).
+- **Native System Tray Indicator & Flyout Dashboard:** Dynamic circular battery badge in your system tray; **left-click** opens a sleek dark-mode Mini-Dashboard with peripheral cards, color-coded progress bars, and charging ETA (`zero` background GPU/CPU overhead when closed), while **right-click** opens quick settings.
 - **Smart Low (15%) & Critical (5%) Battery Alerts:** Audio and desktop alerts with hysteresis anti-spam so you never get caught off guard by a dead battery.
 - **Competitive In-Game Protection (CS2, Dota 2, Steam, etc.):** Automatically detects running fullscreen games and suppresses visual pop-ups (zero focus stealing, zero compositor stutter) while playing a subtle background audio cue in your headset.
+- **Instant USB Hotplug Detection (`udev`):** Detects cable or dongle plug/unplug events in ~0.25s via kernel netlink events and caches HID topology in memory to eliminate unnecessary USB bus polling.
 - **"Start with system" Tray Toggle:** Enable or disable automatic startup on boot right from the System Tray menu on both Linux (`systemd`) and Windows (`Startup`).
 - **One-Command Automated Installer (`install`):** Automatically configures `udev` permissions, installs the binary, and enables the background service.
 - **Zero Input Lag (`O_RDONLY`):** Passive kernel buffer reads on the vendor endpoint without sending unnecessary USB interruptions or touching the mouse motion interface.
@@ -30,7 +31,9 @@ Works out-of-the-box with **KDE Plasma**, **GNOME**, **XFCE**, **Hyprland / Sway
 | **Ajazz AJ199** *(+ AJ139 / AJ159)* | `25a7:fa7c` (2.4G Dongle)<br>`25a7:fa7b` (USB-C Wired) | Areson / CompX 1K (`compx_v1`) | ✅ **Supported** | Feature report `0x08` -> Input `0x09` telemetry, live wired & wireless battery %, charging status + ETA to 100% |
 | **Attack Shark X11 / X3 / X6** | `1d57:fa60` / `25a7:fa7c` | CompX (`compx_v1`) | ✅ **Supported** | Automatic detection via CompX 8K (`0x03`) and CompX 1K (`0x08`/`0x09`) handlers |
 | **Pulsar X2 / Lamzu / VXE R1** | `25a7:*` / `1d57:*` | CompX Generic Fallback | ✅ **Supported** | Auto-detected by vendor ID and HID report descriptor inspection |
-| **Logitech / Bluetooth Peripherals** | Kernel `power_supply` | `sysfs_power_supply` | ✅ **Supported** | Automatically reads any peripheral exposed under `/sys/class/power_supply/` (`scope=Device`) |
+| **VXE R1 Pro / Mad R / ATK F1 / Scyrox V8 / Lamzu 4K** | `3554:*` | Nordic nRF52840 4K/8K (`nordic_v1`) | ✅ **Supported** | Vendor telemetry query (`0x08`/`0x09`) without touching the 4K/8K motion endpoint |
+| **Logitech G Pro X Superlight 1 & 2 / G502 X / Lightspeed** | `046d:*` | Logitech HID++ 2.0 (`hidpp_v2`) | ✅ **Supported** | Uses kernel `hidpp_battery` on Linux and direct HID++ `0x1004`/`0x1000` query on Windows (no G HUB needed!) |
+| **Bluetooth & Kernel Peripherals** | Kernel `power_supply` | `sysfs_power_supply` | ✅ **Supported** | Automatically reads any peripheral exposed under `/sys/class/power_supply/` (`scope=Device`) |
 | **Baseus AeQur GH02** | `10d6:4802` (2.4G Dongle) | Actions Semi (`actions_v1`) | ⚠️ **BT Only** | 2.4GHz dongle only exposes audio + media keys + ADFU bootloader triggers (`0x55`/`0x41`); battery is only transmitted over Bluetooth (`sysfs_power_supply`) |
 
 ---

@@ -5,8 +5,9 @@ import time
 import tempfile
 from typing import Optional
 from areyoulowbattery.models import BatteryStatus, DeviceProfile
-from areyoulowbattery.transport import HidrawDevice, HidrawTransport
+from areyoulowbattery.transport import HidrawDevice, HidrawTransport, enumerate_hidraw
 from areyoulowbattery.handlers.base import BaseProtocolHandler
+from areyoulowbattery.logger import logger
 
 CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
 CACHE_TTL = 3600  # seconds a cached reading is still considered valid
@@ -35,27 +36,34 @@ class CompXHandler(BaseProtocolHandler):
         reports 0x02 (100%) or returns to 0x01 (live ADC reading).
     """
 
-    def _cache_path(self, profile: DeviceProfile) -> str:
+    def _cache_path(self, profile: DeviceProfile, dev: Optional[HidrawDevice] = None) -> str:
         safe = "".join(c if c.isalnum() else "_" for c in profile.name.lower())
-        return os.path.join(CACHE_DIR, f"areyoulowbattery_{safe}.json")
+        vid = profile.match.vendor_id or (dev.vendor_id if dev else 0)
+        if profile.match.product_ids:
+            pid = profile.match.product_ids[0]
+        elif profile.match.product_id is not None:
+            pid = profile.match.product_id
+        else:
+            pid = dev.product_id if dev else 0
+        return os.path.join(CACHE_DIR, f"areyoulowbattery_{safe}_{vid:04x}_{pid:04x}.json")
 
-    def _read_cache(self, profile: DeviceProfile) -> Optional[dict]:
+    def _read_cache(self, profile: DeviceProfile, dev: Optional[HidrawDevice] = None) -> Optional[dict]:
         try:
-            with open(self._cache_path(profile), "r") as f:
+            with open(self._cache_path(profile, dev), "r") as f:
                 data = json.load(f)
             if time.time() - data.get("timestamp", 0) < CACHE_TTL:
                 return data
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("CompX cache read miss for %s: %s", profile.name, e)
         return None
 
-    def _write_cache(self, profile: DeviceProfile, data: dict):
+    def _write_cache(self, profile: DeviceProfile, data: dict, dev: Optional[HidrawDevice] = None):
         try:
             data["timestamp"] = time.time()
-            with open(self._cache_path(profile), "w") as f:
+            with open(self._cache_path(profile, dev), "w") as f:
                 json.dump(data, f)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("CompX cache write failed for %s: %s", profile.name, e)
 
     def _listen_for_report(self, transport: HidrawTransport, cfg: dict) -> Optional[bytes]:
         report_id = cfg.get("report_id", 0x03)
@@ -116,7 +124,7 @@ class CompXHandler(BaseProtocolHandler):
           - Reads 17-byte Input Report 0x09:
             [0x09, 0x04, <status>, 0x00, 0x00, <level>, <battery_pct>, <is_charging>, ..., <checksum>]
         """
-        cached = self._read_cache(profile)
+        cached = self._read_cache(profile, dev)
 
         # On Windows, composite USB peripherals are exposed as multiple Top-Level Collection nodes.
         # Feature Report 0x08 and Input Report 0x09 may belong to different collection handles.
@@ -261,7 +269,7 @@ class CompXHandler(BaseProtocolHandler):
             "full_latched": full_latched,
             "eta_seconds": eta_seconds,
             "raw": raw_hex,
-        })
+        }, dev)
         return BatteryStatus(
             percentage,
             is_charging=is_charging,
@@ -297,7 +305,7 @@ class CompXHandler(BaseProtocolHandler):
         except OSError as e:
             return BatteryStatus(0, is_connected=False, details=f"Failed to open device: {e}")
 
-        cached = self._read_cache(profile)
+        cached = self._read_cache(profile, dev)
 
         with transport:
             pkt = self._listen_for_report(transport, cfg)
@@ -404,7 +412,7 @@ class CompXHandler(BaseProtocolHandler):
             "charge_base": charge_base,
             "eta_seconds": eta_seconds,
             "raw": raw_hex,
-        })
+        }, dev)
 
         return BatteryStatus(
             percentage,
