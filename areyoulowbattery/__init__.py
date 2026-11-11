@@ -1,3 +1,5 @@
-"""AreYouLowBattery - Lightweight battery monitor for wireless peripherals on Linux."""
+"""
+AreYouLowBattery - Lightweight battery monitor & system tray for wireless peripherals.
+"""
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"

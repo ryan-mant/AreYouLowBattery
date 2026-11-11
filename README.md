@@ -33,8 +33,14 @@ Works out-of-the-box with **KDE Plasma**, **GNOME**, **XFCE**, **Hyprland / Sway
 | **Pulsar X2 / Lamzu / VXE R1** | `25a7:*` / `1d57:*` | CompX Generic Fallback | ✅ **Supported** | Auto-detected by vendor ID and HID report descriptor inspection |
 | **VXE R1 Pro / Mad R / ATK F1 / Scyrox V8 / Lamzu 4K** | `3554:*` | Nordic nRF52840 4K/8K (`nordic_v1`) | ✅ **Supported** | Vendor telemetry query (`0x08`/`0x09`) without touching the 4K/8K motion endpoint |
 | **Logitech G Pro X Superlight 1 & 2 / G502 X / Lightspeed** | `046d:*` | Logitech HID++ 2.0 (`hidpp_v2`) | ✅ **Supported** | Uses kernel `hidpp_battery` on Linux and direct HID++ `0x1004`/`0x1000` query on Windows (no G HUB needed!) |
-| **Bluetooth & Kernel Peripherals** | Kernel `power_supply` | `sysfs_power_supply` | ✅ **Supported** | Automatically reads any peripheral exposed under `/sys/class/power_supply/` (`scope=Device`) |
-| **Baseus AeQur GH02** | `10d6:4802` (2.4G Dongle) | Actions Semi (`actions_v1`) | ⚠️ **BT Only** | 2.4GHz dongle only exposes audio + media keys + ADFU bootloader triggers (`0x55`/`0x41`); battery is only transmitted over Bluetooth (`sysfs_power_supply`) |
+| **Razer HyperSpeed Wireless (Viper, DeathAdder, Basilisk, BlackWidow)** | `1532:*` | Razer HyperSpeed (`razer_v1`) | ✅ **Supported** | Direct 90-byte vendor battery report query on HID interface (no Synapse needed!) |
+| **SteelSeries Wireless (Aerox 3/5/9, Rival 3/650, Arctis 1/7/9, Nova 7)** | `1038:*` | SteelSeries (`steelseries_v1`) | ✅ **Supported** | Native mouse and headset telemetry probe |
+| **Corsair Slipstream (Dark Core, Katar, Virtuoso, Void, HS80)** | `1b1c:*` | Corsair Slipstream (`corsair_v1`) | ✅ **Supported** | Direct Slipstream and feature report query |
+| **HyperX Wireless (Cloud Flight/II/Alpha/III, Pulsefire)** | `0951:*` / `03f0:*` | HyperX Wireless (`hyperx_v1`) | ✅ **Supported** | Vendor command query for headsets and mice |
+| **Royalaxe R68** | `25a7:2420` (2.4G) / Bluetooth | CompX / BlueZ Dual-Mode | ✅ **Supported** | Unifies 2.4G dongle with Bluetooth battery telemetry (80%/100%) |
+| **Baseus AeQur GH02** | `10d6:4802` (2.4G Dongle) / Bluetooth | Actions Semi / BlueZ Dual-Mode | ✅ **Supported** | 2.4G audio dongle seamlessly paired with live Bluetooth battery telemetry |
+| **Bluetooth Peripherals (All Brands)** | BlueZ D-Bus & UPower | `bluetooth` / `0x180F` | ✅ **Supported** | **100% universal** GATT Battery Service and HFP telemetry for any connected device |
+| **Generic USB Battery Devices** | USB Power Device | `generic_hid` | ✅ **Supported** | Standard USB-IF HID Power Device (Usage Page `0x85`) |
 
 ---
 

@@ -1,7 +1,7 @@
 [Setup]
 AppId={{8E9A74B2-4C12-4F90-9A1D-2B7E5C8D3F01}
 AppName=AreYouLowBattery
-AppVersion=0.4.2
+AppVersion=0.5.0
 AppPublisher=AreYouLowBattery Open Source Project
 AppPublisherURL=https://github.com/ryan-mant/AreYouLowBattery
 AppSupportURL=https://github.com/ryan-mant/AreYouLowBattery/issues

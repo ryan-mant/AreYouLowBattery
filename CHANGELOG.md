@@ -4,6 +4,40 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.5.0] — 2026-11-11 — Bluetooth Telemetry, Device Discovery Assistant, Anti-Jitter Filter & Protocol Expansion
+
+### ✨ Major New Features
+- **Native Bluetooth Peripheral Battery Telemetry (BlueZ D-Bus & UPower):**
+  - Integrated in-process D-Bus monitoring for Bluetooth peripherals on Linux (`org.bluez` and `org.freedesktop.UPower`).
+  - Automatically queries GATT Battery Service (`0x180F`) and Handsfree profile batteries for connected wireless headsets, keyboards, mice, and gamepads with zero external CLI overhead.
+- **Smart Dual-Mode Unification:**
+  - Automatically identifies when a connected Bluetooth peripheral corresponds to a 2.4G dongle without native telemetry (e.g. Baseus GH02, Royalaxe R68) by matching hardware Modalias VID:PID or unique model identifiers. Unifies them into a single live card without duplicate entries.
+  - Implemented **Category Guard** to prevent cross-category device merging.
+- **Interactive "Find Devices" Assistant (`discovery_dialog.py`):**
+  - Added a built-in GUI discovery tool accessible from the Dashboard header (`🔍`) and Tray context menu (`Find & add new device...`).
+  - Scans USB ports and HID nodes for unmapped peripherals, ignoring motherboard chips, root hubs, webcams, and Bluetooth host adapters.
+  - Features a live **"⚡ Test Protocol"** probe that tests CompX, Nordic, Logitech, Razer, SteelSeries, Corsair, HyperX, and Generic HID channels with animated loading feedback and automatic protocol selection.
+  - Generates custom YAML profiles in 1 click saved to `~/.config/areyoulowbattery/profiles/`.
+- **Anti-Jitter Monotonic Filter:**
+  - Prevents voltage sag bounce (e.g., RGB LEDs turning off causing a resting voltage jump from 80% to 90%).
+  - Smooths battery readings by clamping upward spikes during discharging while allowing immediate downward discharge, charging increases, and sustained external charging updates.
+- **Wired Peripheral Filter (`is_wired`):**
+  - Distinguishes continuous USB power devices (e.g. Logitech G403 HERO, G203) from wireless devices, displaying `🔌 Wired USB` and suppressing false low-battery notifications.
+- **Expanded Protocol Ecosystem:**
+  - Added native protocol handlers for:
+    - **Razer HyperSpeed** (`razer_v1`): Viper, DeathAdder, Basilisk, Naga, BlackWidow.
+    - **SteelSeries Wireless** (`steelseries_v1`): Aerox, Rival, Arctis 1/7/9, Arctis Nova 7.
+    - **Corsair Slipstream** (`corsair_v1`): Dark Core, Katar, Ironclaw, Virtuoso, Void, HS80.
+    - **HyperX Wireless** (`hyperx_v1`): Cloud Flight, Cloud II, Cloud Alpha, Cloud III, Pulsefire.
+    - **Standard USB HID Battery** (`generic_hid`): Generic Power Device (Usage Page 0x85).
+
+### 🎨 UI Polish & Test Coverage
+- Redesigned `DeviceCard` to ensure uniform card height and layout across all devices, eliminating text wrapping glitches on Bluetooth-required peripherals.
+- Standardized all user-facing strings and badges in clean English.
+- Expanded automated unit test suite from 6 to **17 unit tests**, validating all new handlers, filters, and profile generation logic.
+
+---
+
 ## [v0.4.2] — 2026-11-10 — Windows Inno Setup Installer, Universal Linux Build & Diagnostic Exporter
 
 ### ✨ New Features & Packaging
