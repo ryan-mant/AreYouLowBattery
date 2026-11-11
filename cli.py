@@ -35,6 +35,14 @@ def format_text_output(results: List[Tuple[DeviceProfile, BatteryStatus]], show_
             parts.append(f"{profile.icon} OFF")
             continue
 
+        if status.requires_bluetooth:
+            parts.append(f"{profile.icon} BT Req.")
+            continue
+
+        if status.is_wired:
+            parts.append(f"{profile.icon} Wired USB")
+            continue
+
         charging_symbol = "⚡" if status.is_charging else ""
         if status.percentage is None:
             parts.append(f"{profile.icon} {charging_symbol or '?'}")
@@ -58,6 +66,9 @@ def format_json_output(results: List[Tuple[DeviceProfile, BatteryStatus]]) -> st
             "percentage": status.percentage,
             "is_charging": status.is_charging,
             "is_connected": status.is_connected,
+            "is_wired": status.is_wired,
+            "requires_bluetooth": status.requires_bluetooth,
+            "supported": status.supported,
             "details": status.details
         })
     return json.dumps(data, indent=2)
@@ -70,7 +81,14 @@ def format_full_output(results: List[Tuple[DeviceProfile, BatteryStatus]]) -> st
         return "\n".join(lines)
 
     for profile, status in results:
-        state = "ONLINE" if status.is_connected else "OFFLINE"
+        if status.requires_bluetooth:
+            state = "BLUETOOTH REQUIRED (2.4G has no telemetry)"
+        elif status.is_wired:
+            state = "WIRED USB (Continuous power, no battery)"
+        elif status.is_connected:
+            state = "ONLINE"
+        else:
+            state = "OFFLINE"
         chg = " ⚡ (Charging)" if status.is_charging else ""
         eta_str = status.format_eta()
         eta_part = f" [{eta_str}]" if eta_str else ""
@@ -104,6 +122,8 @@ def run_daemon_loop(poll_interval: float = 10.0):
                     "percentage": status.percentage,
                     "is_charging": status.is_charging,
                     "is_connected": status.is_connected,
+                    "is_wired": status.is_wired,
+                    "requires_bluetooth": status.requires_bluetooth,
                     "supported": status.supported,
                     "eta_seconds": status.eta_seconds,
                     "details": status.details,

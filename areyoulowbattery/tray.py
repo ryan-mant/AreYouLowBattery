@@ -28,7 +28,13 @@ def _pick_color(pct: Optional[int], is_charging: bool, is_connected: bool) -> st
     return "#4ade80"      # green
 
 
-def _render_tray_icon(pct: Optional[int], is_charging: bool, is_connected: bool):
+def _render_tray_icon(
+    pct: Optional[int],
+    is_charging: bool,
+    is_connected: bool,
+    is_wired: bool = False,
+    requires_bluetooth: bool = False,
+):
     from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QPen
     from PySide6.QtCore import Qt, QRectF
     from PySide6.QtWidgets import QSystemTrayIcon
@@ -41,7 +47,31 @@ def _render_tray_icon(pct: Optional[int], is_charging: bool, is_connected: bool)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-    color = QColor(_pick_color(pct, is_charging, is_connected))
+    if requires_bluetooth:
+        color = QColor("#38bdf8")
+        label = "BT"
+        font_size = 18
+        span_pct = 0
+    elif is_wired:
+        color = QColor("#38bdf8")
+        label = "🔌"
+        font_size = 20
+        span_pct = 100
+    else:
+        color = QColor(_pick_color(pct, is_charging, is_connected))
+        span_pct = pct if (is_connected and pct is not None) else (100 if is_charging else 0)
+        if not is_connected:
+            label = "OFF"
+            font_size = 16
+        elif is_charging:
+            label = "⚡"
+            font_size = 26
+        elif pct is None:
+            label = "⚡"
+            font_size = 26
+        else:
+            label = str(pct)
+            font_size = 19 if pct == 100 else 22
 
     # Draw subtle rounded ring / progress arc around the icon
     pen = QPen(QColor("#334155"), 5)
@@ -49,28 +79,12 @@ def _render_tray_icon(pct: Optional[int], is_charging: bool, is_connected: bool)
     rect = QRectF(4, 4, size - 8, size - 8)
     painter.drawEllipse(rect)
 
-    arc_pen = QPen(color, 5)
-    arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(arc_pen)
-    span_pct = pct if (is_connected and pct is not None) else (100 if is_charging else 0)
-    # Qt angles are in 1/16th of a degree; start at 90 deg (top) and go clockwise
-    painter.drawArc(rect, 90 * 16, int(-360 * 16 * (span_pct / 100.0)))
-
-    # Draw label in the center:
-    # When charging, show ONLY the lightning bolt (⚡) so it never looks cramped inside the ring;
-    # exact percentage and ETA to 100% are shown on hover / click.
-    if not is_connected:
-        label = "OFF"
-        font_size = 16
-    elif is_charging:
-        label = "⚡"
-        font_size = 26
-    elif pct is None:
-        label = "⚡"
-        font_size = 26
-    else:
-        label = str(pct)
-        font_size = 19 if pct == 100 else 22
+    if span_pct > 0:
+        arc_pen = QPen(color, 5)
+        arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(arc_pen)
+        # Qt angles are in 1/16th of a degree; start at 90 deg (top) and go clockwise
+        painter.drawArc(rect, 90 * 16, int(-360 * 16 * (span_pct / 100.0)))
 
     font = QFont("Sans Serif", font_size, QFont.Weight.Bold)
     painter.setFont(font)
@@ -146,6 +160,10 @@ def _render_multi_tray_icon(devices: List[Tuple[DeviceProfile, BatteryStatus]]):
 
 
 def _format_device_line(prof: DeviceProfile, stat: BatteryStatus) -> str:
+    if stat.requires_bluetooth:
+        return f"{prof.icon} {prof.name}: 2.4G (Connect via Bluetooth to monitor)"
+    if stat.is_wired:
+        return f"{prof.icon} {prof.name}: 🔌 Wired USB (Continuous power)"
     if not stat.is_connected:
         return f"{prof.icon} {prof.name}: Disconnected (OFF)"
     eta_str = stat.format_eta()
@@ -176,6 +194,7 @@ def run_tray():
     status_action = menu.addAction("Reading battery...")
     status_action.setEnabled(False)
     sep_action = menu.addSeparator()
+    find_action = menu.addAction("🔍 Find & add new device...")
     rename_action = menu.addAction("Rename device...")
     type_action = menu.addAction("Change device type...")
     refresh_action = menu.addAction("Refresh now")
@@ -407,8 +426,28 @@ def run_tray():
     stop_event = threading.Event()
     wake_event = threading.Event()
 
+    def handle_open_discovery():
+        from areyoulowbattery.discovery_dialog import DeviceDiscoveryDialog
+        from areyoulowbattery.profile_loader import load_all_profiles
+
+        def on_saved():
+            engine.profiles = load_all_profiles()
+            wake_event.set()
+
+        dlg = DeviceDiscoveryDialog(
+            profiles=engine.profiles,
+            on_profile_created=on_saved,
+        )
+        dlg.exec()
+
+    find_action.triggered.connect(handle_open_discovery)
+
     from areyoulowbattery.popup import BatteryPopup
-    popup = BatteryPopup(on_refresh=lambda: wake_event.set(), context_menu=menu)
+    popup = BatteryPopup(
+        on_refresh=lambda: wake_event.set(),
+        context_menu=menu,
+        on_open_discovery=handle_open_discovery,
+    )
 
     def on_tray_activated(reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -497,7 +536,12 @@ def run_tray():
 
     def check_battery_notifications(supported_devices: List[Tuple[DeviceProfile, BatteryStatus]]):
         for prof, stat in supported_devices:
-            if not stat.is_connected or stat.percentage is None:
+            if (
+                not stat.is_connected
+                or stat.percentage is None
+                or stat.is_wired
+                or stat.requires_bluetooth
+            ):
                 continue
 
             # If device is charging or above 20%, reset triggered notification flags
@@ -545,6 +589,8 @@ def run_tray():
                 "percentage": status.percentage,
                 "is_charging": status.is_charging,
                 "is_connected": status.is_connected,
+                "is_wired": status.is_wired,
+                "requires_bluetooth": status.requires_bluetooth,
                 "supported": status.supported,
                 "eta_seconds": status.eta_seconds,
                 "details": status.details,
@@ -629,16 +675,29 @@ def run_tray():
         type_action.setEnabled(True)
         status_action.setVisible(False)
 
-        # Prefer connected devices over disconnected ones for the primary tray icon
+        # Prefer active battery devices over wired or bluetooth-required for the tray icon
         connected = [(p, s) for p, s in supported if s.is_connected]
-        if len(connected) >= 2:
-            tray.setIcon(_render_multi_tray_icon(connected))
+        batt_connected = [
+            (p, s) for p, s in connected
+            if not s.is_wired and not s.requires_bluetooth and s.percentage is not None
+        ]
+        if len(batt_connected) >= 2:
+            tray.setIcon(_render_multi_tray_icon(batt_connected))
+        elif batt_connected:
+            p, s = batt_connected[0]
+            tray.setIcon(_render_tray_icon(s.percentage, s.is_charging, s.is_connected))
+        elif any(s.is_wired for _, s in connected):
+            tray.setIcon(_render_tray_icon(100, is_charging=False, is_connected=True, is_wired=True))
+        elif any(s.requires_bluetooth for _, s in connected):
+            tray.setIcon(_render_tray_icon(None, is_charging=False, is_connected=True, requires_bluetooth=True))
         else:
             primary_prof, primary_stat = connected[0] if connected else supported[0]
             tray.setIcon(_render_tray_icon(
                 primary_stat.percentage,
                 primary_stat.is_charging,
                 primary_stat.is_connected,
+                is_wired=primary_stat.is_wired,
+                requires_bluetooth=primary_stat.requires_bluetooth,
             ))
 
         tooltip_lines = [_format_device_line(prof, stat) for prof, stat in supported]

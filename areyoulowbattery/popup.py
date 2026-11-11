@@ -9,7 +9,17 @@ from PySide6.QtGui import QCursor, QGuiApplication, QPainter, QColor, QPainterPa
 from areyoulowbattery.models import DeviceProfile, BatteryStatus
 
 
-def _pick_accent_color(pct: Optional[int], is_charging: bool, is_connected: bool) -> str:
+def _pick_accent_color(
+    pct: Optional[int],
+    is_charging: bool,
+    is_connected: bool,
+    is_wired: bool = False,
+    requires_bluetooth: bool = False,
+) -> str:
+    if requires_bluetooth:
+        return "#38bdf8"  # informational sky blue
+    if is_wired:
+        return "#38bdf8"  # continuous USB power
     if not is_connected:
         return "#64748b"  # muted slate
     if is_charging:
@@ -59,7 +69,13 @@ class DeviceCard(QFrame):
     def __init__(self, profile: DeviceProfile, status: BatteryStatus, parent=None):
         super().__init__(parent)
         self.setObjectName("deviceCard")
-        accent = _pick_accent_color(status.percentage, status.is_charging, status.is_connected)
+        accent = _pick_accent_color(
+            status.percentage,
+            status.is_charging,
+            status.is_connected,
+            is_wired=status.is_wired,
+            requires_bluetooth=status.requires_bluetooth,
+        )
 
         self.setStyleSheet(f"""
             QFrame#deviceCard {{
@@ -78,7 +94,7 @@ class DeviceCard(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        # Top row: Icon + Name on left, Percentage badge on right
+        # Top row: Icon + Name on left, Status / Percentage badge on right
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
@@ -86,35 +102,55 @@ class DeviceCard(QFrame):
         name_lbl.setStyleSheet("font-size: 13px; font-weight: 600; color: #f1f5f9;")
         top_row.addWidget(name_lbl, 1)
 
-        if not status.is_connected:
+        if status.requires_bluetooth:
+            pct_text = "BT Req."
+            badge_style = "font-size: 11px; font-weight: 700; color: #38bdf8; background-color: #0f172a; padding: 2px 7px; border-radius: 4px;"
+        elif status.is_wired:
+            pct_text = "🔌 Wired"
+            badge_style = "font-size: 11px; font-weight: 700; color: #38bdf8; background-color: #0f172a; padding: 2px 7px; border-radius: 4px;"
+        elif not status.is_connected:
             pct_text = "OFF"
+            badge_style = f"font-size: 15px; font-weight: 700; color: {accent};"
         elif status.percentage is not None:
             pct_text = f"{status.percentage}%" + (" ⚡" if status.is_charging else "")
+            badge_style = f"font-size: 15px; font-weight: 700; color: {accent};"
         else:
             pct_text = "⚡"
+            badge_style = f"font-size: 15px; font-weight: 700; color: {accent};"
 
         pct_lbl = QLabel(pct_text)
-        pct_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {accent};")
+        pct_lbl.setStyleSheet(badge_style)
         pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         top_row.addWidget(pct_lbl)
 
         layout.addLayout(top_row)
 
-        # Middle row: Pill-shaped antialiased progress bar
-        if not status.is_connected:
-            bar_val = 0
-        elif status.percentage is not None:
-            bar_val = max(0, min(100, status.percentage))
+        # Middle row: Pill-shaped progress bar (uniform across all cards)
+        if status.requires_bluetooth:
+            bar = RoundedBatteryBar(0, "#38bdf8", self)
+            layout.addWidget(bar)
+        elif status.is_wired:
+            bar = RoundedBatteryBar(100, accent, self)
+            layout.addWidget(bar)
         else:
-            bar_val = 100 if status.is_charging else 0
-        bar = RoundedBatteryBar(bar_val, accent, self)
-        layout.addWidget(bar)
+            if not status.is_connected:
+                bar_val = 0
+            elif status.percentage is not None:
+                bar_val = max(0, min(100, status.percentage))
+            else:
+                bar_val = 100 if status.is_charging else 0
+            bar = RoundedBatteryBar(bar_val, accent, self)
+            layout.addWidget(bar)
 
         # Bottom row: Status text on left, Protocol/Mode on right
         bot_row = QHBoxLayout()
         bot_row.setSpacing(6)
 
-        if not status.is_connected:
+        if status.requires_bluetooth:
+            state_str = "Connect via Bluetooth to monitor"
+        elif status.is_wired:
+            state_str = "Wired device • Continuous power"
+        elif not status.is_connected:
             state_str = "Disconnected / Deep Sleep"
         elif status.is_charging:
             eta_str = status.format_eta()
@@ -140,9 +176,22 @@ class DeviceCard(QFrame):
             "compx_v1": "2.4G / USB",
             "nordic_v1": "4K/8K RF",
             "hidpp_v2": "Lightspeed",
+            "razer_v1": "HyperSpeed",
+            "steelseries_v1": "SteelSeries",
+            "corsair_v1": "Slipstream",
+            "hyperx_v1": "HyperX",
             "sysfs_power_supply": "System / BT",
+            "bluetooth": "Bluetooth",
+            "actions_v1": "2.4G Dongle",
+            "generic_hid": "Standard HID",
         }
-        proto_badge = proto_map.get(profile.protocol, profile.protocol)
+        if status.requires_bluetooth:
+            proto_badge = "2.4G Dongle"
+        elif status.is_wired:
+            proto_badge = "Wired USB"
+        else:
+            proto_badge = proto_map.get(profile.protocol, profile.protocol)
+
         proto_lbl = QLabel(proto_badge)
         proto_lbl.setStyleSheet(
             "font-size: 10px; color: #64748b; background-color: #0f172a; "
@@ -163,6 +212,7 @@ class BatteryPopup(QWidget):
         self,
         on_refresh: Callable[[], None],
         context_menu: QMenu,
+        on_open_discovery: Optional[Callable[[], None]] = None,
     ):
         super().__init__(
             None,
@@ -174,10 +224,11 @@ class BatteryPopup(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._on_refresh = on_refresh
         self._context_menu = context_menu
+        self._on_open_discovery = on_open_discovery
         self._devices: List[Tuple[DeviceProfile, BatteryStatus]] = []
         self._last_updated_ts: float = 0.0
 
-        self.setFixedWidth(330)
+        self.setFixedWidth(350)
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -217,6 +268,13 @@ class BatteryPopup(QWidget):
         title = QLabel("AreYouLowBattery")
         title.setStyleSheet("font-size: 13px; font-weight: 700; color: #f8fafc; border: none;")
         header.addWidget(title, 1)
+
+        self.find_btn = QPushButton("🔍")
+        self.find_btn.setObjectName("iconBtn")
+        self.find_btn.setToolTip("Find & configure new devices")
+        self.find_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.find_btn.clicked.connect(self._open_discovery)
+        header.addWidget(self.find_btn)
 
         self.refresh_btn = QPushButton("↻")
         self.refresh_btn.setObjectName("iconBtn")
@@ -258,6 +316,11 @@ class BatteryPopup(QWidget):
         self.footer_lbl.setText("Refreshing telemetry...")
         self._on_refresh()
 
+    def _open_discovery(self):
+        self.hide()
+        if self._on_open_discovery:
+            self._on_open_discovery()
+
     def _open_settings_menu(self):
         btn_pos = self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height() + 4))
         self._context_menu.popup(btn_pos)
@@ -276,16 +339,47 @@ class BatteryPopup(QWidget):
                 w.deleteLater()
 
         if not self._devices:
-            empty = QLabel("No supported wireless peripheral detected.")
-            empty.setStyleSheet(
-                "font-size: 12px; color: #94a3b8; background-color: #1e293b; "
-                "border: 1px solid #334155; border-radius: 10px; padding: 18px;"
-            )
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.cards_layout.addWidget(empty)
+            empty_box = QFrame(self.cards_container)
+            empty_box.setStyleSheet("""
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                border-radius: 10px;
+                padding: 16px;
+            """)
+            eb_layout = QVBoxLayout(empty_box)
+            eb_layout.setSpacing(10)
+            empty_lbl = QLabel("No supported wireless peripheral detected.")
+            empty_lbl.setStyleSheet("font-size: 12px; color: #94a3b8; border: none;")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            eb_layout.addWidget(empty_lbl)
+
+            find_btn = QPushButton("🔍 Find New Devices")
+            find_btn.setObjectName("iconBtn")
+            find_btn.setStyleSheet("""
+                background-color: #0284c7;
+                color: #ffffff;
+                font-weight: 600;
+                padding: 6px 12px;
+                border-radius: 6px;
+                border: none;
+            """)
+            find_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            find_btn.clicked.connect(self._open_discovery)
+            eb_layout.addWidget(find_btn, 0, Qt.AlignmentFlag.AlignCenter)
+            self.cards_layout.addWidget(empty_box)
         else:
-            # Show connected devices first
-            sorted_devs = sorted(self._devices, key=lambda item: (not item[1].is_connected, item[0].name))
+            # Show active battery peripherals first, then wired, then bluetooth-required, then disconnected
+            def _sort_key(item):
+                prof, stat = item
+                if not stat.is_connected:
+                    return (4, prof.name)
+                if stat.requires_bluetooth:
+                    return (3, prof.name)
+                if stat.is_wired:
+                    return (2, prof.name)
+                return (1, prof.name)
+
+            sorted_devs = sorted(self._devices, key=_sort_key)
             for prof, stat in sorted_devs:
                 self.cards_layout.addWidget(DeviceCard(prof, stat, self.cards_container))
 
