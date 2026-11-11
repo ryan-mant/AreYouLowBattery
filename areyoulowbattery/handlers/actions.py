@@ -20,8 +20,9 @@ class ActionsHandler(BaseProtocolHandler):
     """
     def read_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> Optional[BatteryStatus]:
         return BatteryStatus(
-            percentage=0,
+            percentage=None,
             is_connected=True,
-            supported=False,
-            details="2.4GHz dongle has no HID battery channel (0x55/0x41 are ADFU bootloader triggers)"
+            supported=True,
+            requires_bluetooth=True,
+            details="2.4GHz dongle lacks battery telemetry channel (connect via Bluetooth to monitor)",
         )

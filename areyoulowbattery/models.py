@@ -26,6 +26,8 @@ class BatteryStatus:
     details: Optional[str] = None
     supported: bool = True  # False when the device was found but its protocol is not mapped yet
     eta_seconds: Optional[int] = None  # Estimated seconds until 100% when charging
+    is_wired: bool = False  # True when the device is purely wired (continuous USB power, no battery)
+    requires_bluetooth: bool = False  # True when connected via 2.4G dongle without HID battery telemetry
 
     def format_eta(self) -> Optional[str]:
         if not self.is_charging or not self.eta_seconds or self.eta_seconds <= 0:

@@ -13,6 +13,27 @@ from areyoulowbattery.logger import logger
 CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
 CACHE_TTL = 3600
 
+LOGITECH_WIRED_PIDS = {
+    0xc083,  # G403 HERO / Prodigy Wired
+    0xc084,  # G203 Prodigy Wired
+    0xc092,  # G203 Lightsync Wired
+    0xc08b,  # G502 HERO Wired
+    0xc07d,  # G502 Proteus Spectrum Wired
+    0xc094,  # G502 HERO SE Wired
+    0xc087,  # G Pro Gaming Mouse Wired
+    0xc08c,  # G402 Hyperion Fury Wired
+    0xc07e,  # G302 Daedalus Prime Wired
+    0xc07f,  # G303 Daedalus Apex Wired
+    0xc069,  # M500 Corded Mouse
+    0xc016, 0xc01a, 0xc077,  # M100 / B100 corded
+    0xc332,  # G213 Prodigy Keyboard
+    0xc33a,  # G413 Carbon Mechanical Keyboard
+    0xc33f,  # G512 Mechanical Gaming Keyboard
+    0xc33c,  # G513 Mechanical Gaming Keyboard
+    0xc330,  # G810 Orion Spectrum Keyboard
+    0xc335,  # G910 Orion Spectrum Keyboard
+}
+
 
 def _mv_to_percentage(mv: int) -> int:
     """Maps Logitech Li-Po battery millivolts (3500mV..4180mV) to 0..100%."""
@@ -124,8 +145,9 @@ class LogitechHidppHandler(BaseProtocolHandler):
                     return rx
         return None
 
-    def _discover_battery_feature(self, transport: HidrawTransport) -> Optional[Tuple[int, int, int]]:
+    def _discover_battery_feature(self, transport: HidrawTransport, is_receiver: bool = False) -> Optional[Tuple[int, int, int]]:
         # Device index: 0x01 (Lightspeed / Unifying slot 1), 0xFF (direct wired / receiver), 0x02 (slot 2)
+        wired_responded = False
         for dev_idx in (0x01, 0xFF, 0x02, 0x00):
             for feat_id in (0x1004, 0x1000, 0x1001):
                 rx = self._transceive_hidpp(
@@ -136,11 +158,27 @@ class LogitechHidppHandler(BaseProtocolHandler):
                     param1=(feat_id >> 8) & 0xFF,
                     param2=feat_id & 0xFF,
                 )
-                if rx and rx[4] != 0x00:
-                    return (dev_idx, rx[4], feat_id)
+                if rx:
+                    if dev_idx == 0xFF:
+                        wired_responded = True
+                    if rx[4] != 0x00:
+                        return (dev_idx, rx[4], feat_id)
+        if wired_responded and not is_receiver:
+            # Active wired device responded to HID++ root but lacks battery features (wired mouse/keyboard)
+            return (0xFF, 0, 0)
         return None
 
     def read_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> Optional[BatteryStatus]:
+        # Fast path: known corded / wired Logitech peripherals without battery
+        if dev.product_id in LOGITECH_WIRED_PIDS or profile.config.get("is_wired"):
+            return BatteryStatus(
+                percentage=None,
+                is_charging=False,
+                is_connected=True,
+                is_wired=True,
+                details=f"Wired Logitech device (PID 0x{dev.product_id:04x}, continuous USB power)",
+            )
+
         sysfs_status = self._read_linux_sysfs_hidpp()
         if sysfs_status is not None:
             return sysfs_status
@@ -163,6 +201,8 @@ class LogitechHidppHandler(BaseProtocolHandler):
             ]
             candidates.extend(siblings)
 
+        is_receiver = "receiver" in (dev.name or "").lower()
+
         for candidate in candidates:
             transport = HidrawTransport(candidate.dev_path, read_only=False)
             try:
@@ -174,7 +214,7 @@ class LogitechHidppHandler(BaseProtocolHandler):
             with transport:
                 info = self._feature_cache.get(candidate.dev_path)
                 if not info:
-                    info = self._discover_battery_feature(transport)
+                    info = self._discover_battery_feature(transport, is_receiver=is_receiver)
                     if info:
                         self._feature_cache[candidate.dev_path] = info
 
@@ -182,6 +222,15 @@ class LogitechHidppHandler(BaseProtocolHandler):
                     continue
 
                 dev_idx, feat_idx, feat_id = info
+                if dev_idx == 0xFF and feat_id == 0:
+                    # Identified as wired Logitech device with continuous power
+                    return BatteryStatus(
+                        percentage=None,
+                        is_charging=False,
+                        is_connected=True,
+                        is_wired=True,
+                        details=f"Wired Logitech peripheral (PID 0x{candidate.product_id:04x}, continuous USB power)",
+                    )
                 # 0x1004 (Unified Battery: get_status = func 1), 0x1000 / 0x1001 (func 0)
                 func_id = 0x01 if feat_id == 0x1004 else 0x00
                 rx = self._transceive_hidpp(transport, dev_idx, feat_idx, func_id)

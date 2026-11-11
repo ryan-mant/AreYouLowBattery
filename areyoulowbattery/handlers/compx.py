@@ -306,15 +306,25 @@ class CompXHandler(BaseProtocolHandler):
 
     def read_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> Optional[BatteryStatus]:
         cfg = profile.config
+        if cfg.get("requires_bluetooth"):
+            return BatteryStatus(
+                percentage=None,
+                is_connected=True,
+                supported=True,
+                requires_bluetooth=True,
+                details="2.4GHz dongle lacks battery telemetry channel (connect via Bluetooth to monitor)",
+            )
+
         if cfg.get("feature_report_id") == 0x08 or self._has_feature_08_descriptor(dev):
             return self._read_feature_08_battery(dev, profile)
 
         if not self._has_vendor_03_descriptor(dev):
             return BatteryStatus(
-                0,
+                percentage=None,
                 is_connected=True,
-                supported=False,
-                details="2.4GHz receiver does not expose a CompX battery telemetry report (Bluetooth only)",
+                supported=True,
+                requires_bluetooth=True,
+                details="2.4GHz receiver has no battery telemetry report (connect via Bluetooth to monitor)",
             )
 
         batt_offset = cfg.get("battery_offset", 4)
