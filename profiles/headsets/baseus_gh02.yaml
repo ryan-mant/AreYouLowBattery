@@ -7,6 +7,5 @@ match:
   interface_number: 0
 protocol: "actions_v1"
 config:
-  # NOTE: 10d6:4802 only exposes Consumer Control (0x06), Telephony (0x07), and
-  # Actions ADFU bootloader triggers (0x55 / 0x41). Battery is not reported over the 2.4G dongle.
+  requires_bluetooth: true
   supported_over_24g_dongle: false

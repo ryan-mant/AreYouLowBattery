@@ -6,4 +6,5 @@ match:
   product_id: "0x2420"
   interface_number: 1
 protocol: "compx_v1"
-config: {}
+config:
+  requires_bluetooth: true
