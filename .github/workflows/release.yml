@@ -2,6 +2,8 @@ name: Build and Release Binaries (Linux & Windows)
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -76,20 +78,27 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download all built artifacts
-        uses: actions/download-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          path: release_assets
-          merge-multiple: true
+          python-version: "3.12"
 
-      - name: Extract Patch Notes from CHANGELOG.md
+      - name: Determine Release Tag and Extract Patch Notes
+        id: release_meta
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            VER=$(python -c "import areyoulowbattery; print(areyoulowbattery.__version__)")
+            TAG="v${VER}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
           awk -v tag="[$TAG]" '
             index($0, "## " tag) == 1 { flag=1; print; next }
             /^## \[/ && flag { exit }
@@ -99,9 +108,17 @@ jobs:
             echo "Release $TAG" > release_notes.md
           fi
 
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+          merge-multiple: true
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          name: AreYouLowBattery ${{ steps.release_meta.outputs.tag }}
           body_path: release_notes.md
           files: |
             release_assets/areyoulowbattery
