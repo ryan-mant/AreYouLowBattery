@@ -316,6 +316,8 @@ class UpdateDialog(QDialog):
         self.status_lbl.setText(f"Connecting to GitHub...")
 
         self.download_worker = DownloadWorker(download_url, asset_name)
+        _ACTIVE_WORKERS.add(self.download_worker)
+        self.download_worker.finished.connect(lambda: _ACTIVE_WORKERS.discard(self.download_worker))
         self.download_worker.progress.connect(self._on_download_progress)
         self.download_worker.completed.connect(self._on_download_completed)
         self.download_worker.failed.connect(self._on_download_failed)
@@ -392,6 +394,9 @@ class UpdateDialog(QDialog):
         super().reject()
 
 
+_ACTIVE_WORKERS = set()
+
+
 class CheckUpdateThread(QThread):
     finished_check = Signal(object, str)  # (release_dict_or_None, error_str_or_empty)
 
@@ -411,34 +416,45 @@ def run_check_for_updates(parent=None, prompt_if_latest: bool = True):
     """
     Triggers a manual check for updates.
     Runs check asynchronously to keep the UI silky-smooth (0ms freeze).
+    Prevents GC deallocation crashes and unintended app shutdown on Windows.
     """
     if not HAS_QT:
         logger.warning("Qt is not available in current environment; cannot display update dialog.")
         return None
 
+    app = QApplication.instance()
+    if app:
+        app.setQuitOnLastWindowClosed(False)
+
     thread = CheckUpdateThread(parent)
+    _ACTIVE_WORKERS.add(thread)
+
+    def cleanup():
+        _ACTIVE_WORKERS.discard(thread)
+
+    thread.finished.connect(cleanup)
 
     def on_finished(release_info: Optional[Dict[str, Any]], error_msg: str):
-        if error_msg:
-            QMessageBox.warning(
-                parent,
-                "Update Check Failed",
-                f"Unable to connect to GitHub to check for updates:\n{error_msg}\n\nPlease check your internet connection.",
-            )
-        elif release_info:
-            dlg = UpdateDialog(release_info, parent=parent)
-            dlg.exec()
-        else:
-            if prompt_if_latest:
-                QMessageBox.information(
+        try:
+            if error_msg:
+                QMessageBox.warning(
                     parent,
-                    "Up to Date",
-                    f"You are running the latest version of AreYouLowBattery (v{__version__}).",
+                    "Update Check Failed",
+                    f"Unable to connect to GitHub to check for updates:\n{error_msg}\n\nPlease check your internet connection.",
                 )
+            elif release_info:
+                dlg = UpdateDialog(release_info, parent=parent)
+                dlg.exec()
+            else:
+                if prompt_if_latest:
+                    QMessageBox.information(
+                        parent,
+                        "Up to Date",
+                        f"You are running the latest version of AreYouLowBattery (v{__version__}).",
+                    )
+        except Exception as e:
+            logger.error("Failed to present update dialog/message: %s", e)
 
     thread.finished_check.connect(on_finished)
     thread.start()
-    # Keep reference on parent to prevent garbage collection
-    if parent:
-        parent._check_update_thread = thread
     return thread

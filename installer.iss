@@ -22,17 +22,21 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
 [Tasks]
-Name: "autostart"; Description: "Start AreYouLowBattery automatically with Windows"; GroupDescription: "Additional tasks:"
+Name: "autostart"; Description: "Start AreYouLowBattery automatically with Windows"; GroupDescription: "Additional tasks:"; Flags: unchecked
 
 [Files]
 Source: "dist\areyoulowbattery\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+Type: files; Name: "{userstartup}\AreYouLowBattery.bat"
+
 [Icons]
 Name: "{autoprograms}\AreYouLowBattery"; Filename: "{app}\areyoulowbattery.exe"; Parameters: "--tray"
+Name: "{userstartup}\AreYouLowBattery"; Filename: "{app}\areyoulowbattery.exe"; Parameters: "--tray"; Tasks: autostart
 
 [Run]
-Filename: "{cmd}"; Parameters: "/C echo @start """" ""{app}\areyoulowbattery.exe"" --tray > ""{userstartup}\AreYouLowBattery.bat"""; Tasks: autostart; Flags: runhidden
 Filename: "{app}\areyoulowbattery.exe"; Parameters: "--tray"; Description: "Launch AreYouLowBattery now"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: files; Name: "{userstartup}\AreYouLowBattery.bat"
+Type: files; Name: "{userstartup}\AreYouLowBattery.lnk"
