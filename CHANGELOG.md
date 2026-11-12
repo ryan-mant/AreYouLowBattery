@@ -4,6 +4,24 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.5.1] — 2026-11-12 — Windows Bluetooth Telemetry, In-App Self-Update & UI Polish
+
+### ✨ Major New Features
+- **Native Windows Bluetooth Peripheral Battery Telemetry:**
+  - Added native PnP device property monitoring (`DEVPKEY_Device_BatteryLevel` `{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2`) via in-process Windows Registry (`HKLM\SYSTEM\CurrentControlSet\Enum\BTHENUM` & `BTHLE`) with zero subprocess overhead.
+  - Added non-blocking PowerShell PnP query fallback and 15s telemetry cache to guarantee 0.0% CPU overhead.
+  - Automatically identifies Bluetooth keyboards, mice, headsets, and controllers without hardcoding any specific model or brand.
+- **In-App Self-Update (1-Click Update):**
+  - Added manual **"Check for updates..."** action in both the System Tray context menu and the Dashboard settings menu (⚙).
+  - Strictly on-demand: zero background network requests and 0.0% CPU impact during normal monitoring.
+  - **Windows 1-Click Update**: Automatically checks GitHub Releases API, displays version diff and release patch notes, downloads `AreYouLowBattery-Windows-Setup.exe` to `%TEMP%` with real-time download progress, and launches the Inno Setup installer while cleanly releasing file locks.
+  - **Linux Support**: Automatically updates the standalone binary (`~/.local/bin/areyoulowbattery`) and restarts the systemd user service (`areyoulowbattery.service`), or guides the user when running from source.
+- **UI & Menu Alignment Polish:**
+  - Removed disparate emoji icons from menu action labels (`Find devices...`, `Check for updates...`), keeping clean text-only action items.
+  - Enhanced `QMenu` stylesheet for pixel-perfect vertical alignment and uniform spacing.
+
+---
+
 ## [v0.5.0] — 2026-11-11 — Bluetooth Telemetry, Device Discovery Assistant, Anti-Jitter Filter & Protocol Expansion
 
 ### ✨ Major New Features
