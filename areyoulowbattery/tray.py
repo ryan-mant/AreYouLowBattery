@@ -235,7 +235,7 @@ def run_tray():
     def is_autostart_enabled() -> bool:
         if sys.platform == "win32":
             startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
-            return os.path.exists(os.path.join(startup_dir, "AreYouLowBattery.bat"))
+            return os.path.exists(os.path.join(startup_dir, "AreYouLowBattery.lnk")) or os.path.exists(os.path.join(startup_dir, "AreYouLowBattery.bat"))
         else:
             service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
             if not os.path.exists(service_path):
@@ -256,6 +256,7 @@ def run_tray():
             startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
             os.makedirs(startup_dir, exist_ok=True)
             bat_path = os.path.join(startup_dir, "AreYouLowBattery.bat")
+            lnk_path = os.path.join(startup_dir, "AreYouLowBattery.lnk")
             if checked:
                 exe_path = os.path.realpath(sys.executable)
                 with open(bat_path, "w") as f:
@@ -265,11 +266,12 @@ def run_tray():
                         script = os.path.abspath(sys.argv[0])
                         f.write(f'@start "" "{sys.executable}" "{script}" --tray\n')
             else:
-                if os.path.exists(bat_path):
-                    try:
-                        os.remove(bat_path)
-                    except OSError:
-                        pass
+                for target in (bat_path, lnk_path):
+                    if os.path.exists(target):
+                        try:
+                            os.remove(target)
+                        except OSError:
+                            pass
         else:
             if checked:
                 try:
@@ -412,12 +414,13 @@ def run_tray():
         if reply == QMessageBox.StandardButton.Yes:
             if sys.platform == "win32":
                 startup_dir = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup")
-                bat_path = os.path.join(startup_dir, "AreYouLowBattery.bat")
-                if os.path.exists(bat_path):
-                    try:
-                        os.remove(bat_path)
-                    except OSError:
-                        pass
+                for target_name in ("AreYouLowBattery.bat", "AreYouLowBattery.lnk"):
+                    fpath = os.path.join(startup_dir, target_name)
+                    if os.path.exists(fpath):
+                        try:
+                            os.remove(fpath)
+                        except OSError:
+                            pass
                 config_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "areyoulowbattery")
                 if os.path.exists(config_dir):
                     shutil.rmtree(config_dir, ignore_errors=True)

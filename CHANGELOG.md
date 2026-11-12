@@ -4,6 +4,22 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.5.2] — 2026-11-12 — Windows Updater GC Stability & Native Autostart Shortcut
+
+### 🐛 Bug Fixes & Stability Improvements
+- **Resolved Windows Silent Crash on Check for Updates:**
+  - Fixed a race condition where the asynchronous `CheckUpdateThread` was garbage-collected by Python while the underlying C++ network thread was executing, triggering an unhandled abort on Windows.
+  - Implemented persistent thread lifecycle registry `_ACTIVE_WORKERS` to guarantee memory safety during background update checks and downloads.
+  - Hardened `QApplication.quitOnLastWindowClosed(False)` to ensure closing informational update dialogs never inadvertently closes the System Tray application.
+- **Fixed Windows Autostart Shortcut Persistence:**
+  - Migrated Windows startup shortcut from legacy `.bat` command execution to native Inno Setup `.lnk` integration (`[Icons]` with `Tasks: autostart; Flags: unchecked`).
+  - The "Start with Windows" installer checkbox now defaults to unchecked and, when left unselected or unchecked during an upgrade, cleanly removes any prior startup shortcut.
+  - Added cleanup logic to purge legacy `AreYouLowBattery.bat` files.
+- **Linux CI Headless Compatibility:**
+  - Handled headless environments where `libEGL.so.1` is absent by isolating Qt GUI imports, allowing CLI execution and unit tests to run cleanly in pure server environments.
+
+---
+
 ## [v0.5.1] — 2026-11-12 — Windows Bluetooth Telemetry, In-App Self-Update & UI Polish
 
 ### ✨ Major New Features
