@@ -8,12 +8,24 @@ import urllib.request
 import urllib.error
 from typing import Optional, Tuple, Dict, Any
 
-from PySide6.QtCore import Qt, QThread, Signal, QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QTextBrowser, QMessageBox, QApplication
-)
+try:
+    from PySide6.QtCore import Qt, QThread, Signal, QUrl
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import (
+        QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+        QProgressBar, QTextBrowser, QMessageBox, QApplication
+    )
+    HAS_QT = True
+except (ImportError, OSError):
+    HAS_QT = False
+    Qt = None
+    QThread = object
+    QDialog = object
+    Signal = lambda *args: None
+    QUrl = None
+    QDesktopServices = None
+    QMessageBox = None
+    QApplication = None
 
 from areyoulowbattery import __version__
 from areyoulowbattery.logger import logger
@@ -400,6 +412,10 @@ def run_check_for_updates(parent=None, prompt_if_latest: bool = True):
     Triggers a manual check for updates.
     Runs check asynchronously to keep the UI silky-smooth (0ms freeze).
     """
+    if not HAS_QT:
+        logger.warning("Qt is not available in current environment; cannot display update dialog.")
+        return None
+
     thread = CheckUpdateThread(parent)
 
     def on_finished(release_info: Optional[Dict[str, Any]], error_msg: str):
