@@ -160,19 +160,20 @@ def _render_multi_tray_icon(devices: List[Tuple[DeviceProfile, BatteryStatus]]):
 
 
 def _format_device_line(prof: DeviceProfile, stat: BatteryStatus) -> str:
+    icon = prof.icon.strip()
     if stat.requires_bluetooth:
-        return f"{prof.icon} {prof.name}: 2.4G (Connect via Bluetooth to monitor)"
+        return f"{icon}  {prof.name}: 2.4G (Connect via Bluetooth to monitor)"
     if stat.is_wired:
-        return f"{prof.icon} {prof.name}: 🔌 Wired USB (Continuous power)"
+        return f"{icon}  {prof.name}: Wired USB (Continuous power)"
     if not stat.is_connected:
-        return f"{prof.icon} {prof.name}: Disconnected (OFF)"
+        return f"{icon}  {prof.name}: Disconnected (OFF)"
     eta_str = stat.format_eta()
     eta_suffix = f" ({eta_str})" if eta_str else ""
     if stat.percentage is None:
-        return f"{prof.icon} {prof.name}: ⚡ Charging via cable{eta_suffix}"
+        return f"{icon}  {prof.name}: Charging via cable{eta_suffix}"
     if stat.is_charging:
-        return f"{prof.icon} {prof.name}: {stat.percentage}% ⚡ Charging{eta_suffix}"
-    return f"{prof.icon} {prof.name}: {stat.percentage}%"
+        return f"{icon}  {prof.name}: {stat.percentage}% Charging{eta_suffix}"
+    return f"{icon}  {prof.name}: {stat.percentage}%"
 
 
 def run_tray():
@@ -191,10 +192,38 @@ def run_tray():
     tray.setToolTip("AreYouLowBattery - Reading peripherals...")
 
     menu = QMenu()
+    menu.setStyleSheet("""
+        QMenu {
+            background-color: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 6px;
+            color: #f8fafc;
+        }
+        QMenu::item {
+            background-color: transparent;
+            padding: 6px 14px;
+            border-radius: 4px;
+            color: #cbd5e1;
+            font-size: 12px;
+        }
+        QMenu::item:selected {
+            background-color: #1e293b;
+            color: #38bdf8;
+        }
+        QMenu::item:disabled {
+            color: #94a3b8;
+        }
+        QMenu::separator {
+            height: 1px;
+            background-color: #334155;
+            margin: 4px 6px;
+        }
+    """)
     status_action = menu.addAction("Reading battery...")
     status_action.setEnabled(False)
     sep_action = menu.addSeparator()
-    find_action = menu.addAction("🔍 Find & add new device...")
+    find_action = menu.addAction("Find devices...")
     rename_action = menu.addAction("Rename device...")
     type_action = menu.addAction("Change device type...")
     refresh_action = menu.addAction("Refresh now")
@@ -278,6 +307,10 @@ def run_tray():
             )
 
     diag_action.triggered.connect(handle_export_diag)
+
+    update_action = menu.addAction("Check for updates...")
+    from areyoulowbattery.updater import run_check_for_updates
+    update_action.triggered.connect(lambda: run_check_for_updates(None, prompt_if_latest=True))
 
     uninstall_action = menu.addAction("Uninstall...")
     quit_action = menu.addAction("Quit")

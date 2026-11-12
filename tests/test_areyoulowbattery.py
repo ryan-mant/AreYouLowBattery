@@ -1,4 +1,5 @@
 import os
+import json
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -427,6 +428,98 @@ class TestAreYouLowBattery(unittest.TestCase):
             self.assertIsNotNone(st)
             self.assertTrue(st.is_connected)
             self.assertEqual(st.percentage, 77)
+
+    def test_windows_bluetooth_polling_powershell(self):
+        from areyoulowbattery.engine import BatteryEngine
+        engine = BatteryEngine()
+        mock_output = "Generic Bluetooth Keyboard|85\nGeneric Optical Mouse|90\n"
+
+        with patch("sys.platform", "win32"), \
+             patch("subprocess.run") as mock_sub:
+            mock_sub.return_value = MagicMock(stdout=mock_output)
+            results = engine._poll_bluetooth_windows()
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0][0], "Generic Bluetooth Keyboard")
+            self.assertEqual(results[0][1], 85)
+            self.assertEqual(results[0][4], "input-keyboard")
+            self.assertEqual(results[1][0], "Generic Optical Mouse")
+            self.assertEqual(results[1][1], 90)
+            self.assertEqual(results[1][4], "input-mouse")
+
+    def test_windows_bluetooth_polling_registry(self):
+        from areyoulowbattery.engine import BatteryEngine
+        engine = BatteryEngine()
+
+        mock_winreg = MagicMock()
+        mock_winreg.HKEY_LOCAL_MACHINE = 1
+        mock_winreg.OpenKey.return_value.__enter__.return_value = 10
+        # When querying bus key info: 1 device
+        mock_winreg.QueryInfoKey.return_value = (1, 0, 0)
+        mock_winreg.EnumKey.return_value = "DEV_01"
+        # QueryValueEx for FriendlyName and Battery property
+        def fake_query_val(key, val_name):
+            if val_name in ("FriendlyName", "DeviceDesc"):
+                return ("Generic Wireless Keyboard", 1)
+            if val_name == "":
+                return (bytes([82]), 3)  # 82% battery
+            raise OSError("Not found")
+
+        mock_winreg.QueryValueEx.side_effect = fake_query_val
+
+        with patch("sys.platform", "win32"), \
+             patch.dict("sys.modules", {"winreg": mock_winreg}):
+            results = engine._poll_bluetooth_windows()
+            self.assertTrue(len(results) >= 1)
+            self.assertEqual(results[0][0], "Generic Wireless Keyboard")
+            self.assertEqual(results[0][1], 82)
+
+    def test_updater_version_parsing_and_comparison(self):
+        from areyoulowbattery.updater import parse_version, is_newer_version
+        self.assertEqual(parse_version("v0.5.0"), (0, 5, 0))
+        self.assertEqual(parse_version("v1.2.3"), (1, 2, 3))
+        self.assertEqual(parse_version("0.6.0-beta"), (0, 6, 0))
+        self.assertEqual(parse_version("v2.0.0.1"), (2, 0, 0, 1))
+
+        self.assertTrue(is_newer_version("v0.5.1", "0.5.0"))
+        self.assertTrue(is_newer_version("v1.0.0", "0.5.0"))
+        self.assertFalse(is_newer_version("v0.5.0", "0.5.0"))
+        self.assertFalse(is_newer_version("v0.4.9", "0.5.0"))
+
+    def test_updater_asset_matching(self):
+        from areyoulowbattery.updater import find_matching_asset
+        mock_release = {
+            "assets": [
+                {"name": "areyoulowbattery-linux-x86_64", "browser_download_url": "https://fake/linux"},
+                {"name": "AreYouLowBattery-Windows-Setup.exe", "browser_download_url": "https://fake/win"},
+                {"name": "99-areyoulowbattery.rules", "browser_download_url": "https://fake/rules"},
+            ]
+        }
+        win_asset = find_matching_asset(mock_release, platform="win32")
+        self.assertIsNotNone(win_asset)
+        self.assertEqual(win_asset["name"], "AreYouLowBattery-Windows-Setup.exe")
+
+        linux_asset = find_matching_asset(mock_release, platform="linux")
+        self.assertIsNotNone(linux_asset)
+        self.assertEqual(linux_asset["name"], "areyoulowbattery-linux-x86_64")
+
+    def test_updater_fetch_latest_release(self):
+        from areyoulowbattery.updater import fetch_latest_release
+        mock_data = json.dumps({
+            "tag_name": "v0.5.1",
+            "name": "Release v0.5.1",
+            "body": "Bugfixes and updater feature.",
+            "assets": [{"name": "AreYouLowBattery-Windows-Setup.exe"}]
+        }).encode("utf-8")
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = mock_data
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            data = fetch_latest_release("ryan-mant/AreYouLowBattery")
+            self.assertEqual(data["tag_name"], "v0.5.1")
+            self.assertEqual(len(data["assets"]), 1)
 
 
 if __name__ == "__main__":
