@@ -1,12 +1,14 @@
 [Unit]
 Description=AreYouLowBattery - Wireless Peripheral Battery Monitor Daemon
 After=default.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 %h/Documentos/projetos/AreYouLowBattery/cli.py --daemon
-Restart=always
-RestartSec=3
+ExecStart=%h/.local/bin/areyoulowbattery --tray
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=default.target
