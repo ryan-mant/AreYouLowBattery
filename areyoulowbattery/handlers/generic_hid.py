@@ -31,7 +31,7 @@ class GenericHidHandler(BaseProtocolHandler):
             )
 
         try:
-            with HidrawTransport(dev.dev_path) as tp:
+            with HidrawTransport(dev.dev_path, read_only=True) as tp:
                 data = tp.read_input_report(length=64, timeout_sec=0.25)
                 if data and len(data) >= 2:
                     val = data[1]

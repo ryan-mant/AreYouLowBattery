@@ -126,11 +126,11 @@ class DeviceConfigCard(QFrame):
         lbl_cat.setStyleSheet("color: #94a3b8; font-size: 12px;")
         self.cmb_cat = QComboBox()
         cats = [
-            ("🎮 Gamepad", DeviceCategory.GAMEPAD, "🎮"),
+            ("🔋 Other", DeviceCategory.OTHER, "🔋"),
             ("🖱️ Mouse", DeviceCategory.MOUSE, "🖱️"),
             ("⌨️ Keyboard", DeviceCategory.KEYBOARD, "⌨️"),
             ("🎧 Headset", DeviceCategory.HEADSET, "🎧"),
-            ("🔋 Other", DeviceCategory.OTHER, "🔋"),
+            ("🎮 Gamepad", DeviceCategory.GAMEPAD, "🎮"),
         ]
         default_cat_idx = 0
         for idx, (label, cat_enum, ico) in enumerate(cats):
@@ -157,6 +157,7 @@ class DeviceConfigCard(QFrame):
             ("2.4G CompX / Beken (Ajazz, Delux, Pulsar, Keychron)", "compx_v1"),
             ("2.4G Nordic 4K/8K RF (VXE, ATK, Scyrox, Lamzu)", "nordic_v1"),
             ("2.4G Logitech Lightspeed & Bolt (G Pro, G502, G915)", "hidpp_v2"),
+            ("2.4G Logitech HID++ 1.0 (Legacy Nano Receiver M185/M220)", "hidpp_v1"),
             ("2.4G Razer HyperSpeed (Viper, DeathAdder, Basilisk)", "razer_v1"),
             ("2.4G SteelSeries (Aerox, Rival, Arctis, Nova)", "steelseries_v1"),
             ("2.4G Corsair Slipstream (Dark Core, Virtuoso, HS80)", "corsair_v1"),
@@ -203,6 +204,18 @@ class DeviceConfigCard(QFrame):
         self.test_status_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.test_status_lbl.setStyleSheet("font-size: 11px; color: #94a3b8; padding-top: 2px;")
         layout.addWidget(self.test_status_lbl)
+
+        from areyoulowbattery.engine import load_ignored_devices
+        ignored = load_ignored_devices()
+        self.is_ignored = (
+            self.dev.name in ignored
+            or f"{self.dev.vendor_id:04x}:{self.dev.product_id:04x}" in ignored
+            or f"{self.dev.vendor_id:04x}" in ignored
+        )
+        if self.is_ignored:
+            self.btn_save.setText("Restore Device")
+            self.test_status_lbl.setText("ℹ️ Device was previously removed/hidden. Click 'Restore Device' to unhide it.")
+            self.test_status_lbl.setStyleSheet("font-size: 11px; color: #38bdf8;")
 
     def _handle_test(self):
         self.btn_test.setEnabled(False)
@@ -254,6 +267,11 @@ class DeviceConfigCard(QFrame):
             QMessageBox.warning(self, "Invalid Name", "Please enter a valid peripheral name.")
             return
 
+        from areyoulowbattery.engine import restore_device
+        restore_device(name, self.dev.vendor_id, self.dev.product_id)
+        if self.dev.name and self.dev.name != name:
+            restore_device(self.dev.name, self.dev.vendor_id, self.dev.product_id)
+
         cat_enum, icon = self.cmb_cat.currentData()
         mode_id = self.cmb_mode.currentData()
 
@@ -287,8 +305,8 @@ class DeviceConfigCard(QFrame):
                     yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
             self.btn_save.setEnabled(False)
-            self.btn_save.setText("✓ Profile Saved")
-            self.test_status_lbl.setText("Active! Profile saved to user directory.")
+            self.btn_save.setText("✓ Device Restored" if getattr(self, "is_ignored", False) else "✓ Profile Saved")
+            self.test_status_lbl.setText("Active! Device restored to dashboard." if getattr(self, "is_ignored", False) else "Active! Profile saved to user directory.")
             self.test_status_lbl.setStyleSheet("font-size: 11px; color: #4ade80; font-weight: 600;")
             self.on_saved_callback()
         except Exception as e:

@@ -7,7 +7,14 @@ import threading
 import subprocess
 from typing import List, Tuple, Optional
 
-from areyoulowbattery.engine import BatteryEngine
+from areyoulowbattery.engine import (
+    BatteryEngine,
+    save_custom_name,
+    save_custom_category,
+    save_device_protocol,
+    remove_device,
+)
+from areyoulowbattery.profile_loader import load_all_profiles
 from areyoulowbattery.models import DeviceProfile, BatteryStatus
 
 CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
@@ -176,11 +183,11 @@ def _format_device_line(prof: DeviceProfile, stat: BatteryStatus) -> str:
     return f"{icon}  {prof.name}: {stat.percentage}%"
 
 
-def run_tray():
-    from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog
+def run_tray(auto_show: bool = False):
+    from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog, QMessageBox
     from PySide6.QtGui import QCursor, QAction
-    from PySide6.QtCore import Signal, QObject
-    from areyoulowbattery.engine import save_custom_name, save_custom_category
+    from PySide6.QtCore import Signal, QObject, QTimer
+    from areyoulowbattery.engine import save_custom_name, save_custom_category, save_device_protocol, remove_device
     from areyoulowbattery.models import CATEGORY_ICONS, DeviceCategory
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -226,6 +233,8 @@ def run_tray():
     find_action = menu.addAction("Find devices...")
     rename_action = menu.addAction("Rename device...")
     type_action = menu.addAction("Change device type...")
+    proto_action = menu.addAction("Change device protocol...")
+    remove_action = menu.addAction("Remove device...")
     refresh_action = menu.addAction("Refresh now")
     menu.addSeparator()
 
@@ -318,6 +327,20 @@ def run_tray():
     quit_action = menu.addAction("Quit")
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(menu)
+
+    # Dedicated clean settings menu for the Dashboard gear button (excludes redundant per-card actions)
+    dashboard_settings_menu = QMenu()
+    dashboard_settings_menu.setStyleSheet(menu.styleSheet())
+    dashboard_settings_menu.addAction(find_action)
+    dashboard_settings_menu.addAction(refresh_action)
+    dashboard_settings_menu.addSeparator()
+    dashboard_settings_menu.addAction(autostart_action)
+    dashboard_settings_menu.addAction(diag_action)
+    dashboard_settings_menu.addAction(update_action)
+    dashboard_settings_menu.addSeparator()
+    dashboard_settings_menu.addAction(uninstall_action)
+    dashboard_settings_menu.addAction(quit_action)
+
     tray.show()
     if sys.platform == "win32":
         tray.showMessage(
@@ -329,10 +352,12 @@ def run_tray():
 
     current_supported_devices: List[Tuple[DeviceProfile, BatteryStatus]] = []
 
-    def prompt_rename():
-        if not current_supported_devices:
+    def prompt_rename(target_prof: Optional[DeviceProfile] = None):
+        if not current_supported_devices and not target_prof:
             return
-        if len(current_supported_devices) == 1:
+        if target_prof:
+            dev_name = target_prof.name
+        elif len(current_supported_devices) == 1:
             dev_name = current_supported_devices[0][0].name
         else:
             dev_names = [f"{p.icon} {p.name}" for p, _ in current_supported_devices]
@@ -352,12 +377,15 @@ def run_tray():
         )
         if ok and new_name.strip():
             save_custom_name(dev_name, new_name.strip())
+            engine.profiles = load_all_profiles()
             wake_event.set()
 
-    def prompt_change_type():
-        if not current_supported_devices:
+    def prompt_change_type(target_prof: Optional[DeviceProfile] = None):
+        if not current_supported_devices and not target_prof:
             return
-        if len(current_supported_devices) == 1:
+        if target_prof:
+            prof = target_prof
+        elif len(current_supported_devices) == 1:
             prof = current_supported_devices[0][0]
         else:
             dev_names = [f"{p.icon} {p.name}" for p, _ in current_supported_devices]
@@ -395,11 +423,102 @@ def run_tray():
             for lbl, cat, ico in type_options:
                 if lbl == choice:
                     save_custom_category(prof.name, cat, ico)
+                    engine.profiles = load_all_profiles()
                     wake_event.set()
                     break
 
-    rename_action.triggered.connect(prompt_rename)
-    type_action.triggered.connect(prompt_change_type)
+    def prompt_change_protocol(target_prof: Optional[DeviceProfile] = None):
+        if not current_supported_devices and not target_prof:
+            return
+        if target_prof:
+            prof = target_prof
+        elif len(current_supported_devices) == 1:
+            prof = current_supported_devices[0][0]
+        else:
+            dev_names = [f"{p.icon} {p.name}" for p, _ in current_supported_devices]
+            choice, ok = QInputDialog.getItem(
+                None, "Change Protocol", "Select device:", dev_names, 0, False
+            )
+            if not ok or not choice:
+                return
+            idx = dev_names.index(choice)
+            prof = current_supported_devices[idx][0]
+
+        modes = [
+            ("2.4G CompX / Beken (Ajazz, Delux, Pulsar, Keychron)", "compx_v1", None),
+            ("2.4G Nordic 4K/8K RF (VXE, ATK, Scyrox, Lamzu)", "nordic_v1", None),
+            ("2.4G Logitech Lightspeed & Bolt (G Pro, G502, G915)", "hidpp_v2", None),
+            ("2.4G Logitech HID++ 1.0 (Legacy Nano Receiver M185/M220)", "hidpp_v1", None),
+            ("2.4G Razer HyperSpeed (Viper, DeathAdder, Basilisk)", "razer_v1", None),
+            ("2.4G SteelSeries (Aerox, Rival, Arctis, Nova)", "steelseries_v1", None),
+            ("2.4G Corsair Slipstream (Dark Core, Virtuoso, HS80)", "corsair_v1", None),
+            ("2.4G HyperX Wireless (Cloud Flight/II/Alpha, Pulsefire)", "hyperx_v1", None),
+            ("2.4G Wireless Headset (Actions Semi / Baseus)", "actions_v1", None),
+            ("2.4G Standard USB HID Battery (Generic 0x85)", "generic_hid", None),
+            ("2.4G Dongle (Requires Bluetooth for battery)", "compx_v1", {"requires_bluetooth": True}),
+            ("Wired USB (Continuous power, no battery alerts)", "compx_v1", {"is_wired": True}),
+        ]
+        labels = [m[0] for m in modes]
+        current_idx = 0
+        for i, m in enumerate(modes):
+            if m[1] == prof.protocol:
+                current_idx = i
+                break
+
+        choice, ok = QInputDialog.getItem(
+            None,
+            "Change Protocol",
+            f"Select new protocol for '{prof.name}':",
+            labels,
+            current_idx,
+            False,
+        )
+        if ok and choice:
+            for lbl, proto_id, cfg in modes:
+                if lbl == choice:
+                    save_device_protocol(prof.name, proto_id, cfg)
+                    engine.profiles = load_all_profiles()
+                    wake_event.set()
+                    break
+
+    def prompt_remove_device(target_prof: Optional[DeviceProfile] = None):
+        if not current_supported_devices and not target_prof:
+            return
+        if target_prof:
+            prof = target_prof
+        elif len(current_supported_devices) == 1:
+            prof = current_supported_devices[0][0]
+        else:
+            dev_names = [f"{p.icon} {p.name}" for p, _ in current_supported_devices]
+            choice, ok = QInputDialog.getItem(
+                None, "Remove Device", "Select device to remove:", dev_names, 0, False
+            )
+            if not ok or not choice:
+                return
+            idx = dev_names.index(choice)
+            prof = current_supported_devices[idx][0]
+
+        reply = QMessageBox.question(
+            None,
+            "Remove Device",
+            f"Are you sure you want to remove '{prof.name}' from the battery monitor?\n\nThis will hide the device and delete any custom profile created for it.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            remove_device(
+                prof.name,
+                prof.match.vendor_id,
+                prof.match.product_id,
+                getattr(prof.match, "product_ids", None),
+            )
+            engine.profiles = load_all_profiles()
+            wake_event.set()
+
+    rename_action.triggered.connect(lambda: prompt_rename())
+    type_action.triggered.connect(lambda: prompt_change_type())
+    proto_action.triggered.connect(lambda: prompt_change_protocol())
+    remove_action.triggered.connect(lambda: prompt_remove_device())
 
     def prompt_uninstall():
         from PySide6.QtWidgets import QMessageBox
@@ -461,8 +580,15 @@ def run_tray():
 
     stop_event = threading.Event()
     wake_event = threading.Event()
+    force_refresh = False
+
+    def trigger_force_refresh():
+        nonlocal force_refresh
+        force_refresh = True
+        wake_event.set()
 
     def handle_open_discovery():
+        was_visible = popup.isVisible() if 'popup' in locals() else False
         from areyoulowbattery.discovery_dialog import DeviceDiscoveryDialog
         from areyoulowbattery.profile_loader import load_all_profiles
 
@@ -473,28 +599,54 @@ def run_tray():
         dlg = DeviceDiscoveryDialog(
             profiles=engine.profiles,
             on_profile_created=on_saved,
+            parent=popup if 'popup' in locals() and popup.isVisible() else None,
         )
         dlg.exec()
+        if was_visible:
+            QTimer.singleShot(100, popup.show_centered_or_tray)
 
     find_action.triggered.connect(handle_open_discovery)
 
+    def handle_device_action(action: str, prof: DeviceProfile):
+        was_visible = popup.isVisible()
+        if action == "change_protocol":
+            prompt_change_protocol(prof)
+        elif action == "rename":
+            prompt_rename(prof)
+        elif action == "change_type":
+            prompt_change_type(prof)
+        elif action == "remove":
+            prompt_remove_device(prof)
+
+        if was_visible:
+            QTimer.singleShot(100, popup.show_centered_or_tray)
+
     from areyoulowbattery.popup import BatteryPopup
     popup = BatteryPopup(
-        on_refresh=lambda: wake_event.set(),
+        on_refresh=trigger_force_refresh,
+        settings_menu=dashboard_settings_menu,
         context_menu=menu,
         on_open_discovery=handle_open_discovery,
+        on_device_action=handle_device_action,
     )
+
+    if auto_show:
+        trigger_force_refresh()
+        QTimer.singleShot(250, popup.show_centered_or_tray)
 
     def on_tray_activated(reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            trigger_force_refresh()
             popup.toggle_at_cursor()
 
     tray.activated.connect(on_tray_activated)
 
     class Updater(QObject):
         updated = Signal(object)
+        auto_detected = Signal(object)  # AutoDetectEvent
 
     updater = Updater()
+    pending_identify_click = {"active": False}
     engine = BatteryEngine()
     dynamic_actions = []
     # Tracks notification levels per device: key = profile.name, value = set of triggered thresholds (e.g. {15, 5})
@@ -635,7 +787,17 @@ def run_tray():
         try:
             with open(tmp_file, "w") as f:
                 json.dump(cached_data, f)
+            if sys.platform != "win32":
+                try:
+                    os.chmod(tmp_file, 0o600)
+                except OSError:
+                    pass
             os.replace(tmp_file, CACHE_FILE)
+            if sys.platform != "win32":
+                try:
+                    os.chmod(CACHE_FILE, 0o600)
+                except OSError:
+                    pass
         except Exception:
             pass
 
@@ -663,9 +825,9 @@ def run_tray():
                     if stop_event.is_set():
                         break
                     if any(act in line for act in (" add ", " remove ", " change ")):
-                        # Brief debounce so udev 0666 permissions settle on new /dev/hidraw nodes
+                        # Brief debounce so udev permissions settle on new nodes
                         time.sleep(0.25)
-                        wake_event.set()
+                        trigger_force_refresh()
                 proc.terminate()
                 return
             except Exception:
@@ -679,12 +841,33 @@ def run_tray():
             if cur_sig != last_sig:
                 last_sig = cur_sig
                 time.sleep(0.2)
-                wake_event.set()
+                trigger_force_refresh()
 
     def worker():
+        nonlocal force_refresh
+        from areyoulowbattery.autodetect import AutoDetector
+        from areyoulowbattery.profile_loader import load_all_profiles
+        detector = AutoDetector()
+        first_run = True
         while not stop_event.is_set():
             try:
-                results = engine.poll_all_devices()
+                is_force = force_refresh
+                force_refresh = False
+
+                # Zero-config: on app start and on every hotplug/refresh, identify brand-new
+                # peripherals (once per model) and set them up without any user action.
+                if is_force or first_run:
+                    first_run = False
+                    try:
+                        events = detector.run(engine.profiles)
+                        if any(e.kind == "profiled" for e in events):
+                            engine.profiles = load_all_profiles()
+                        for ev in events:
+                            updater.auto_detected.emit(ev)
+                    except Exception as e:
+                        print(f"Auto-detect error: {e}", file=sys.stderr, flush=True)
+
+                results = engine.poll_all_devices(force=is_force)
                 write_cache(results)
                 updater.updated.emit(results)
             except Exception as e:
@@ -705,10 +888,14 @@ def run_tray():
             status_action.setText("No active device")
             rename_action.setEnabled(False)
             type_action.setEnabled(False)
+            proto_action.setEnabled(False)
+            remove_action.setEnabled(False)
             return
 
         rename_action.setEnabled(True)
         type_action.setEnabled(True)
+        proto_action.setEnabled(True)
+        remove_action.setEnabled(True)
         status_action.setVisible(False)
 
         # Prefer active battery devices over wired or bluetooth-required for the tray icon
@@ -757,7 +944,24 @@ def run_tray():
             dynamic_actions.append(act)
 
     updater.updated.connect(on_updated)
-    refresh_action.triggered.connect(lambda: wake_event.set())
+
+    def on_auto_detected(ev):
+        pending_identify_click["active"] = ev.kind == "unrecognized"
+        tray.showMessage(
+            ev.title, ev.message, QSystemTrayIcon.MessageIcon.Information, 8000
+        )
+        if ev.kind == "profiled":
+            wake_event.set()
+
+    def on_message_clicked():
+        # Only the "unrecognized device" notification opens the identification assistant.
+        if pending_identify_click["active"]:
+            pending_identify_click["active"] = False
+            handle_open_discovery()
+
+    updater.auto_detected.connect(on_auto_detected)
+    tray.messageClicked.connect(on_message_clicked)
+    refresh_action.triggered.connect(trigger_force_refresh)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()

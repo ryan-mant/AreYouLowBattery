@@ -2,6 +2,8 @@ import os
 import sys
 import re
 import json
+import ssl
+import hashlib
 import tempfile
 import subprocess
 import urllib.request
@@ -55,9 +57,77 @@ def is_newer_version(candidate: str, current: str = __version__) -> bool:
     return parse_version(candidate) > parse_version(current)
 
 
+def _create_ssl_context() -> ssl.SSLContext:
+    """
+    Creates a secure SSLContext using system trust stores and certifi if available.
+    Loads system Root certificates on Windows via ssl.enum_certificates("ROOT") and "CA".
+    Strictly enforces valid certificate verification (never disables TLS).
+    """
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(certifi.where())
+    except Exception:
+        pass
+
+    if sys.platform == "win32" and hasattr(ssl, "enum_certificates"):
+        for store_name in ("ROOT", "CA"):
+            try:
+                for cert, encoding, trust in ssl.enum_certificates(store_name):
+                    if encoding == "x509_asn":
+                        try:
+                            ctx.load_verify_locations(cdata=cert)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+    return ctx
+
+
+def extract_expected_sha256(release_info: Dict[str, Any], filename: str) -> Optional[str]:
+    """
+    Extracts the expected SHA-256 hash for the given asset.
+
+    Source priority:
+      1. GitHub API `assets[].digest` ("sha256:<hex>") computed by GitHub at upload time.
+      2. Release notes, supporting formats:
+           <sha256>  <filename>
+           SHA256 (<filename>) = <sha256>
+           SHA-256: <sha256>
+    Returns None when no trusted hash is published (the updater then refuses to install).
+    """
+    for asset in release_info.get("assets", []) or []:
+        if asset.get("name", "").lower() == filename.lower():
+            digest = str(asset.get("digest") or "").strip().lower()
+            if digest.startswith("sha256:") and re.fullmatch(r"[0-9a-f]{64}", digest[7:]):
+                return digest[7:]
+
+    body = release_info.get("body", "")
+    if not body:
+        return None
+
+    fname_lower = filename.lower()
+    for line in body.splitlines():
+        line_clean = line.strip()
+        if fname_lower in line_clean.lower():
+            # Look for 64-character hex string
+            m = re.search(r"\b([0-9a-fA-F]{64})\b", line_clean)
+            if m:
+                return m.group(1).lower()
+
+    # Generic SHA-256 tag in release notes if only 1 asset is released
+    assets = release_info.get("assets", [])
+    if len(assets) == 1:
+        m = re.search(r"sha[-_]?256\s*[:=]\s*([0-9a-fA-F]{64})", body, re.IGNORECASE)
+        if m:
+            return m.group(1).lower()
+
+    return None
+
+
 def fetch_latest_release(repo: str = REPO_SLUG, timeout: float = 6.0) -> Dict[str, Any]:
     """
-    Fetches the latest release payload from GitHub Releases API.
+    Fetches the latest release payload from GitHub Releases API with strict TLS verification.
     Raises urllib.error.URLError or json.JSONDecodeError on network/parsing failure.
     """
     req = urllib.request.Request(
@@ -67,7 +137,8 @@ def fetch_latest_release(repo: str = REPO_SLUG, timeout: float = 6.0) -> Dict[st
             "Accept": "application/vnd.github.v3+json",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    ssl_ctx = _create_ssl_context()
+    with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
         if resp.status != 200:
             raise urllib.error.HTTPError(
                 resp.url, resp.status, f"HTTP error {resp.status}", resp.headers, None
@@ -108,10 +179,11 @@ class DownloadWorker(QThread):
     completed = Signal(str)      # local_file_path
     failed = Signal(str)         # error message
 
-    def __init__(self, download_url: str, dest_filename: str):
+    def __init__(self, download_url: str, dest_filename: str, expected_sha256: Optional[str] = None):
         super().__init__()
         self.download_url = download_url
         self.dest_filename = dest_filename
+        self.expected_sha256 = expected_sha256
         self._is_cancelled = False
 
     def cancel(self):
@@ -123,10 +195,23 @@ class DownloadWorker(QThread):
                 self.download_url,
                 headers={"User-Agent": f"AreYouLowBattery-Updater/{__version__}"},
             )
-            dest_dir = tempfile.gettempdir()
-            target_path = os.path.join(dest_dir, self.dest_filename)
+            if not self.expected_sha256:
+                self.failed.emit(
+                    "Security Check Failed: this release does not publish a SHA-256 checksum, "
+                    "so the download was refused. Please download it manually from the release page."
+                )
+                return
 
-            with urllib.request.urlopen(req, timeout=20.0) as resp:
+            # Private (0700) per-download directory + sanitized filename:
+            # prevents local file collision/symlink tricks and path traversal via release metadata.
+            safe_name = os.path.basename(self.dest_filename.replace("\\", "/")) or "update_installer"
+            dest_dir = tempfile.mkdtemp(prefix="areyoulowbattery-update-")
+            target_path = os.path.join(dest_dir, safe_name)
+
+            ssl_ctx = _create_ssl_context()
+            hasher = hashlib.sha256()
+
+            with urllib.request.urlopen(req, timeout=30.0, context=ssl_ctx) as resp:
                 total_size = int(resp.headers.get("Content-Length", 0))
                 downloaded = 0
                 chunk_size = 64 * 1024  # 64 KB chunks
@@ -136,6 +221,7 @@ class DownloadWorker(QThread):
                         if self._is_cancelled:
                             try:
                                 os.remove(target_path)
+                                os.rmdir(dest_dir)
                             except OSError:
                                 pass
                             return
@@ -144,8 +230,24 @@ class DownloadWorker(QThread):
                         if not chunk:
                             break
                         out_file.write(chunk)
+                        hasher.update(chunk)
                         downloaded += len(chunk)
                         self.progress.emit(downloaded, total_size)
+
+            computed_sha256 = hasher.hexdigest().lower()
+            logger.info("Download completed (%s bytes). SHA-256: %s", downloaded, computed_sha256)
+
+            clean_expected = self.expected_sha256.lower().strip()
+            if computed_sha256 != clean_expected:
+                try:
+                    os.remove(target_path)
+                    os.rmdir(dest_dir)
+                except OSError:
+                    pass
+                self.failed.emit(
+                    f"Security Check Failed: SHA-256 hash mismatch!\nExpected: {clean_expected}\nGot: {computed_sha256}"
+                )
+                return
 
             self.completed.emit(target_path)
         except Exception as e:
@@ -309,13 +411,27 @@ class UpdateDialog(QDialog):
             return
 
         asset_name = self.asset.get("name", "update_installer")
+        expected_sha = extract_expected_sha256(self.release_info, asset_name)
+        if not expected_sha:
+            # Never download/execute a binary without a published checksum.
+            QMessageBox.warning(
+                self,
+                "Update Blocked",
+                "This release does not publish a SHA-256 checksum for its installer, "
+                "so automatic installation was blocked for your safety.\n\n"
+                "The release page will open so you can download it manually.",
+            )
+            QDesktopServices.openUrl(QUrl(self.html_url))
+            self.accept()
+            return
+
         self.install_btn.setEnabled(False)
         self.close_btn.setText("Cancel")
         self.progress_bar.setVisible(True)
         self.status_lbl.setVisible(True)
         self.status_lbl.setText(f"Connecting to GitHub...")
 
-        self.download_worker = DownloadWorker(download_url, asset_name)
+        self.download_worker = DownloadWorker(download_url, asset_name, expected_sha256=expected_sha)
         _ACTIVE_WORKERS.add(self.download_worker)
         self.download_worker.finished.connect(lambda: _ACTIVE_WORKERS.discard(self.download_worker))
         self.download_worker.progress.connect(self._on_download_progress)

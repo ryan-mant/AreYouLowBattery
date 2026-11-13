@@ -521,6 +521,509 @@ class TestAreYouLowBattery(unittest.TestCase):
             self.assertEqual(data["tag_name"], "v0.5.1")
             self.assertEqual(len(data["assets"]), 1)
 
+    def test_logitech_hidpp_10_mileage_register_0x0d(self):
+        handler = LogitechHidppHandler()
+        prof = DeviceProfile(
+            name="Logitech M185",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x046D, product_id=0xC534, interface_number=1),
+            protocol="hidpp_v1",
+        )
+        dev = HidrawDevice("/dev/hidraw85", 0x046D, 0xC534, 1, "Logitech USB Receiver")
+        cache_file = handler._cache_path(prof, dev)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+
+        try:
+            # Short report 0x10, dev_idx 0x01, reg_type 0x81, reg_addr 0x0D, params[0] = 75 (75%), params[2] = 0x00
+            resp_0x0d = bytes([0x10, 0x01, 0x81, 0x0D, 75, 0x00, 0x00])
+            with patch.object(handler, "_read_linux_sysfs_hidpp", return_value=None), \
+                 patch.object(handler, "_discover_battery_feature", return_value=None), \
+                 patch("areyoulowbattery.handlers.hidpp.HidrawTransport", return_value=FakeTransport([resp_0x0d])):
+                st = handler.read_battery(dev, prof)
+                self.assertIsNotNone(st)
+                self.assertTrue(st.is_connected)
+                self.assertEqual(st.percentage, 75)
+                self.assertFalse(st.is_charging)
+                self.assertIn("HID++ 1.0 Mileage", st.details)
+        finally:
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+
+    def test_logitech_hidpp_10_status_register_0x07(self):
+        handler = LogitechHidppHandler()
+        prof = DeviceProfile(
+            name="Logitech M220",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x046D, product_id=0xC534, interface_number=1),
+            protocol="hidpp_v1",
+        )
+        dev = HidrawDevice("/dev/hidraw84", 0x046D, 0xC534, 1, "Logitech USB Receiver")
+        cache_file = handler._cache_path(prof, dev)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+
+        try:
+            # Short report 0x10, dev_idx 0x01, reg_type 0x80, reg_addr 0x07, params[0] = 3 (Good = 55%)
+            resp_0x07 = bytes([0x10, 0x01, 0x80, 0x07, 0x03, 0x00, 0x00])
+            with patch.object(handler, "_read_linux_sysfs_hidpp", return_value=None), \
+                 patch.object(handler, "_discover_battery_feature", return_value=None), \
+                 patch.object(handler, "_transceive_hidpp_10", side_effect=[None, resp_0x07]), \
+                 patch("areyoulowbattery.handlers.hidpp.HidrawTransport", return_value=FakeTransport([])):
+                st = handler.read_battery(dev, prof)
+                self.assertIsNotNone(st)
+                self.assertTrue(st.is_connected)
+                self.assertEqual(st.percentage, 55)
+                self.assertIn("HID++ 1.0 Status", st.details)
+        finally:
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+
+    def test_discovery_filters_internal_hardware_touchpad_and_virtual_device(self):
+        from areyoulowbattery.discovery import is_device_ignored, _infer_category_and_icon
+
+        # Goodix touchpad / sensor
+        self.assertTrue(is_device_ignored("Goodix Touchpad", 0x27C6))
+        # Dell HIDI2C Touchpad
+        self.assertTrue(is_device_ignored("HIDI2C Device", 0x04F3))
+        # Microsoft Converted Device
+        self.assertTrue(is_device_ignored("ConvertedDevice", 0x045E, 0x0000))
+        # Internal trackpad
+        self.assertTrue(is_device_ignored("Synaptics Trackpad", 0x06CB))
+
+        # Real gaming mouse should NOT be ignored
+        self.assertFalse(is_device_ignored("Razer Viper V2 Pro", 0x1532, 0x00A5))
+
+        # Unrecognized peripheral fallback must be OTHER (🔋), never GAMEPAD
+        cat, ico = _infer_category_and_icon("Wireless Peripheral")
+        self.assertEqual(cat, DeviceCategory.OTHER)
+        self.assertEqual(ico, "🔋")
+
+    def test_updater_sha256_checksum_verification_and_mismatch(self):
+        import hashlib
+        from areyoulowbattery.updater import extract_expected_sha256, DownloadWorker
+
+        # 1. Test hash extraction from release notes
+        fake_sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        release_info = {
+            "body": f"Release notes.\nSHA256: {fake_sha}  AreYouLowBattery-Windows-Setup.exe"
+        }
+        extracted = extract_expected_sha256(release_info, "AreYouLowBattery-Windows-Setup.exe")
+        self.assertEqual(extracted, fake_sha)
+
+        # 2. Test DownloadWorker detecting SHA-256 mismatch
+        fake_bytes = b"Hello Untrusted Update Payload!"
+        mismatch_sha = "0000000000000000000000000000000000000000000000000000000000000000"
+        worker = DownloadWorker(
+            "https://fake/update.exe",
+            "fake_test_update.exe",
+            expected_sha256=mismatch_sha
+        )
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Length": str(len(fake_bytes))}
+        mock_resp.read.side_effect = [fake_bytes, b""]
+        mock_resp.__enter__.return_value = mock_resp
+
+        failed_messages = []
+        worker.failed.connect(lambda msg: failed_messages.append(msg))
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            worker.run()
+            self.assertEqual(len(failed_messages), 1)
+            self.assertIn("Security Check Failed", failed_messages[0])
+
+    def test_safe_protocol_probe_respects_vendor_isolation(self):
+        from areyoulowbattery.discovery import probe_device_protocol, DiscoveredDevice
+
+        # Razer VID 0x1532 should ONLY test razer_v1, NEVER Logitech or CompX
+        razer_dev = DiscoveredDevice(
+            name="Razer Viper",
+            vendor_id=0x1532,
+            product_id=0x00A5,
+            dev_path="/dev/hidraw70",
+        )
+        tested_protocols = []
+        def fake_get_handler(proto):
+            tested_protocols.append(proto)
+            mock_h = MagicMock()
+            mock_h.read_battery.return_value = None
+            return mock_h
+
+        with patch("areyoulowbattery.discovery.get_handler", side_effect=fake_get_handler):
+            probe_device_protocol(razer_dev)
+            self.assertEqual(tested_protocols, ["razer_v1"])
+
+    def test_passive_sleep_suppresses_redundant_rf_polling(self):
+        from areyoulowbattery.engine import BatteryEngine
+        from areyoulowbattery.models import BatteryStatus
+        engine = BatteryEngine()
+
+        prof = DeviceProfile(
+            name="UnitTest Sleep Mouse",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x25A7, product_id=0xFA7C),
+            protocol="compx_v1",
+        )
+        dev = HidrawDevice("/dev/hidraw69", 0x25A7, 0xFA7C, 1, "Dongle")
+
+        mock_offline = BatteryStatus(percentage=0, is_connected=False, details="Device asleep")
+        read_calls = 0
+
+        def fake_get_handler(proto):
+            nonlocal read_calls
+            mock_h = MagicMock()
+            def fake_read(*args, **kwargs):
+                nonlocal read_calls
+                read_calls += 1
+                return mock_offline
+            mock_h.read_battery = fake_read
+            return mock_h
+
+        with patch("areyoulowbattery.engine.enumerate_hidraw", return_value=[dev]), \
+             patch.object(engine, "find_profile_for_device", return_value=prof), \
+             patch("areyoulowbattery.engine.get_handler", side_effect=fake_get_handler):
+
+            # 1. First poll: device is found asleep (read_calls = 1)
+            res1 = engine.poll_all_devices(force=False)
+            self.assertEqual(read_calls, 1)
+            self.assertIn(prof.name, engine._offline_devices)
+
+            # 2. Routine background poll 10s later: MUST NOT query hardware (read_calls remains 1!)
+            res2 = engine.poll_all_devices(force=False)
+            self.assertEqual(read_calls, 1)
+
+            # 3. User clicks tray / opens flyout (force=True): MUST query hardware
+            res3 = engine.poll_all_devices(force=True)
+            self.assertEqual(read_calls, 2)
+
+    def test_device_removal_and_ignored_devices(self):
+        import tempfile
+        from areyoulowbattery.engine import BatteryEngine, remove_device, load_ignored_devices, unignore_device
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch("areyoulowbattery.engine._get_config_dir", return_value=tmp_dir):
+                remove_device("Unwanted Peripheral", 0x9999, 0x8888)
+                ignored = load_ignored_devices()
+                self.assertIn("Unwanted Peripheral", ignored)
+                self.assertIn("9999:8888", ignored)
+
+                # Test restore_device
+                from areyoulowbattery.engine import restore_device
+                restore_device("Unwanted Peripheral", 0x9999, 0x8888)
+                self.assertNotIn("Unwanted Peripheral", load_ignored_devices())
+                self.assertNotIn("9999:8888", load_ignored_devices())
+        finally:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_dynamic_protocol_change(self):
+        import tempfile
+        from areyoulowbattery.engine import BatteryEngine, save_device_protocol
+        from areyoulowbattery.transport import HidrawDevice
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch("areyoulowbattery.engine._get_config_dir", return_value=tmp_dir):
+                engine = BatteryEngine()
+                dev = HidrawDevice("/dev/hidraw83", 0x25A7, 0xFA7C, 1, "Ajazz Dongle")
+                orig_prof = engine.find_profile_for_device(dev)
+                self.assertIsNotNone(orig_prof)
+
+                # Switch protocol to nordic_v1 dynamically
+                save_device_protocol(orig_prof.name, "nordic_v1")
+                new_prof = engine.find_profile_for_device(dev)
+                self.assertIsNotNone(new_prof)
+                self.assertEqual(new_prof.protocol, "nordic_v1")
+        finally:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_ble_and_hidpp_deduplication(self):
+        from areyoulowbattery.engine import BatteryEngine
+        from areyoulowbattery.models import BatteryStatus
+        engine = BatteryEngine()
+
+        # Pebble K380s matched via HID++ reporting 15%
+        prof_hidpp = DeviceProfile(
+            name="Logitech Pebble Keys 2 K380s",
+            category=DeviceCategory.KEYBOARD,
+            icon="⌨️",
+            match=DeviceMatch(vendor_id=0x046D, product_id=0xB377),
+            protocol="hidpp_v2",
+        )
+        stat_hidpp = BatteryStatus(percentage=15, is_connected=True, is_charging=False, details="HID++ 2.0")
+
+        # Windows Bluetooth cache reporting 95%
+        mock_bt = [("Pebble K380s", 95, "Windows Registry", "bthle:v046dpb377", "input-keyboard")]
+        mock_dev = HidrawDevice("/dev/hidraw82", 0x046D, 0xB377, 1, "Logitech Pebble Keys")
+
+        with patch("areyoulowbattery.engine.enumerate_hidraw", return_value=[mock_dev]), \
+             patch.object(engine, "find_profile_for_device", return_value=prof_hidpp), \
+             patch.object(engine, "_poll_bluetooth_peripheral_batteries", return_value=mock_bt), \
+             patch.object(engine, "_poll_sysfs_peripheral_batteries", return_value=[]), \
+             patch("areyoulowbattery.engine.get_handler") as mock_get_handler:
+            mock_h = MagicMock()
+            mock_h.read_battery.return_value = stat_hidpp
+            mock_get_handler.return_value = mock_h
+
+            results = engine.poll_all_devices()
+
+            # MUST have deduplicated into exactly 1 device card!
+            self.assertEqual(len(results), 1)
+            p, s = results[0]
+            # MUST retain direct hardware telemetry (15%) rather than stale Windows GATT cache (95%)
+            self.assertEqual(s.percentage, 15)
+
+    def test_updater_requires_published_checksum_and_prefers_github_digest(self):
+        from areyoulowbattery.updater import extract_expected_sha256, DownloadWorker
+        good = "a" * 64
+        body_hash = "b" * 64
+        release = {
+            "body": f"SHA256: {body_hash}  setup.exe",
+            "assets": [{"name": "setup.exe", "digest": f"sha256:{good}"}],
+        }
+        # GitHub-computed asset digest wins over text in release notes
+        self.assertEqual(extract_expected_sha256(release, "setup.exe"), good)
+        # Malformed digest is ignored
+        bad = {"assets": [{"name": "setup.exe", "digest": "sha256:zzz"}], "body": ""}
+        self.assertIsNone(extract_expected_sha256(bad, "setup.exe"))
+
+        # Worker must refuse to download anything without an expected hash
+        worker = DownloadWorker("https://fake/setup.exe", "setup.exe", expected_sha256=None)
+        failed = []
+        worker.failed.connect(lambda m: failed.append(m))
+        with patch("urllib.request.urlopen") as mock_open:
+            worker.run()
+            mock_open.assert_not_called()
+        self.assertEqual(len(failed), 1)
+        self.assertIn("SHA-256", failed[0])
+
+    def test_updater_sanitizes_filename_and_uses_private_dir(self):
+        import hashlib
+        from areyoulowbattery.updater import DownloadWorker
+        payload = b"payload"
+        worker = DownloadWorker(
+            "https://fake/x", "../../evil.exe",
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        resp = MagicMock()
+        resp.headers = {"Content-Length": str(len(payload))}
+        resp.read.side_effect = [payload, b""]
+        resp.__enter__.return_value = resp
+        done = []
+        worker.completed.connect(lambda p: done.append(p))
+        with patch("urllib.request.urlopen", return_value=resp):
+            worker.run()
+        self.assertEqual(len(done), 1)
+        path = done[0]
+        try:
+            self.assertEqual(os.path.basename(path), "evil.exe")
+            self.assertIn("areyoulowbattery-update-", path)
+            if os.name == "posix":
+                self.assertEqual(os.stat(os.path.dirname(path)).st_mode & 0o777, 0o700)
+        finally:
+            os.remove(path)
+            os.rmdir(os.path.dirname(path))
+
+    def test_unknown_vendor_probe_is_passive_generic_hid_only(self):
+        from areyoulowbattery.discovery import probe_device_protocol, DiscoveredDevice
+        dev = DiscoveredDevice(name="Mystery", vendor_id=0xBEEF, product_id=0x0001, dev_path="/dev/hidraw71")
+        tested = []
+        def fake_get_handler(proto):
+            tested.append(proto)
+            h = MagicMock()
+            h.read_battery.return_value = None
+            return h
+        with patch("areyoulowbattery.discovery.get_handler", side_effect=fake_get_handler):
+            probe_device_protocol(dev)
+        self.assertEqual(tested, ["generic_hid"])
+
+    def test_generic_hid_opens_device_read_only(self):
+        from areyoulowbattery.handlers.generic_hid import GenericHidHandler
+        dev = HidrawDevice("/dev/hidraw72", 0xBEEF, 1, 0, "Mystery")
+        prof = DeviceProfile(name="X", category=DeviceCategory.MOUSE, icon="", match=DeviceMatch(vendor_id=0xBEEF, product_id=1), protocol="generic_hid")
+        with patch("areyoulowbattery.handlers.generic_hid.HidrawTransport") as mock_tp:
+            mock_tp.return_value.__enter__.return_value.read_input_report.return_value = None
+            GenericHidHandler().read_battery(dev, prof)
+            self.assertTrue(mock_tp.call_args.kwargs.get("read_only"))
+
+    def test_per_device_query_rate_limit(self):
+        from areyoulowbattery.engine import BatteryEngine
+        from areyoulowbattery.models import BatteryStatus
+        engine = BatteryEngine()
+        prof = DeviceProfile(
+            name="UnitTest RateLimit Mouse", category=DeviceCategory.MOUSE, icon="",
+            match=DeviceMatch(vendor_id=0x25A7, product_id=0xFA7D), protocol="compx_v1",
+        )
+        dev = HidrawDevice("/dev/hidraw73", 0x25A7, 0xFA7D, 1, "Dongle")
+        calls = 0
+        def fake_get_handler(proto):
+            h = MagicMock()
+            def fake_read(*a, **k):
+                nonlocal calls
+                calls += 1
+                return BatteryStatus(percentage=80, is_connected=True, details="ok")
+            h.read_battery = fake_read
+            return h
+        with patch("areyoulowbattery.engine.enumerate_hidraw", return_value=[dev]), \
+             patch.object(engine, "find_profile_for_device", return_value=prof), \
+             patch.object(engine, "_poll_bluetooth_peripheral_batteries", return_value=[]), \
+             patch.object(engine, "_poll_sysfs_peripheral_batteries", return_value=[]), \
+             patch("areyoulowbattery.engine.get_handler", side_effect=fake_get_handler):
+            engine.poll_all_devices()
+            engine.poll_all_devices()
+            engine.poll_all_devices()
+            self.assertEqual(calls, 1)  # rapid repeats are served from the limiter
+            engine.poll_all_devices(force=True)
+            self.assertEqual(calls, 2)  # explicit user refresh always hits hardware
+
+    def test_systemd_service_does_not_restart_forever(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "systemd", "areyoulowbattery.service")) as f:
+            text = f.read()
+        self.assertIn("Restart=on-failure", text)
+        self.assertNotIn("Restart=always", text)
+        self.assertIn("StartLimitBurst", text)
+
+    # ---- Zero-config auto-detection -------------------------------------------------------
+    def _make_detector(self):
+        import tempfile
+        from areyoulowbattery.autodetect import AutoDetector
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        return AutoDetector(state_path=os.path.join(tmp, "state.json"))
+
+    @staticmethod
+    def _fake_probe(proto, pct):
+        from areyoulowbattery.discovery import ProbeResult
+        return ProbeResult(proto, pct, MagicMock(), MagicMock())
+
+    def test_autodetect_known_vendor_creates_profile_after_two_consistent_reads(self):
+        from areyoulowbattery.discovery import DiscoveredDevice
+        det = self._make_detector()
+        dev = DiscoveredDevice(name="Razer Viper Dongle", vendor_id=0x1532, product_id=0x00A5, dev_path="/dev/hidraw90")
+        with patch("areyoulowbattery.autodetect.scan_unmapped_devices", return_value=[dev]), \
+             patch("areyoulowbattery.autodetect.load_ignored_devices", return_value=set()), \
+             patch("areyoulowbattery.autodetect.time.sleep"), \
+             patch("areyoulowbattery.autodetect.probe_device_protocol_live", return_value=self._fake_probe("razer_v1", 80)) as probe, \
+             patch("areyoulowbattery.autodetect.confirm_probe", return_value=79) as confirm, \
+             patch("areyoulowbattery.autodetect.save_custom_profile") as save:
+            events = det.run([])
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].kind, "profiled")
+            self.assertEqual(events[0].protocol, "razer_v1")
+            save.assert_called_once()
+            self.assertEqual(save.call_args.kwargs["protocol"], "razer_v1")
+            # exactly ONE probe + ONE confirmation re-read (no second full probe)
+            self.assertEqual(probe.call_count, 1)
+            self.assertEqual(confirm.call_count, 1)
+            # Same model again: never probed or announced twice
+            self.assertEqual(det.run([]), [])
+            self.assertEqual(probe.call_count, 1)
+
+    def test_autodetect_rejects_inconsistent_probe_reads(self):
+        from areyoulowbattery.discovery import DiscoveredDevice
+        det = self._make_detector()
+        dev = DiscoveredDevice(name="Corsair Dongle", vendor_id=0x1B1C, product_id=0x1B7A, dev_path="/dev/hidraw91")
+        with patch("areyoulowbattery.autodetect.scan_unmapped_devices", return_value=[dev]), \
+             patch("areyoulowbattery.autodetect.load_ignored_devices", return_value=set()), \
+             patch("areyoulowbattery.autodetect.time.sleep"), \
+             patch("areyoulowbattery.autodetect.probe_device_protocol_live", return_value=self._fake_probe("corsair_v1", 80)), \
+             patch("areyoulowbattery.autodetect.confirm_probe", return_value=20), \
+             patch("areyoulowbattery.autodetect.save_custom_profile") as save:
+            events = det.run([])
+            save.assert_not_called()  # false positive guard
+            self.assertEqual([e.kind for e in events], ["unrecognized"])
+
+    def test_autodetect_failed_probe_retries_limited_and_announces_once(self):
+        from areyoulowbattery import autodetect
+        from areyoulowbattery.discovery import DiscoveredDevice
+        det = self._make_detector()
+        dev = DiscoveredDevice(name="HyperX Dongle", vendor_id=0x0951, product_id=0x16A4, dev_path="/dev/hidraw92")
+        announced = 0
+        clock = [1000.0]
+        with patch("areyoulowbattery.autodetect.scan_unmapped_devices", return_value=[dev]), \
+             patch("areyoulowbattery.autodetect.load_ignored_devices", return_value=set()), \
+             patch("areyoulowbattery.autodetect.time.time", side_effect=lambda: clock[0]), \
+             patch("areyoulowbattery.autodetect.probe_device_protocol_live", return_value=None) as probe, \
+             patch("areyoulowbattery.autodetect.confirm_probe") as confirm:
+            for _ in range(6):
+                announced += len(det.run([]))
+                clock[0] += autodetect.RETRY_INTERVAL + 1
+            self.assertEqual(announced, 1)
+            self.assertEqual(probe.call_count, autodetect.MAX_ATTEMPTS)  # retries are bounded
+            confirm.assert_not_called()  # a failed probe never triggers extra reads
+
+    def test_autodetect_unknown_vendor_never_probes_or_writes(self):
+        from areyoulowbattery.discovery import DiscoveredDevice
+        det = self._make_detector()
+        wireless = DiscoveredDevice(name="Cool 2.4G Wireless Receiver", vendor_id=0xBEEF, product_id=0x0001, dev_path="/dev/hidraw93")
+        wired_kb = DiscoveredDevice(name="USB Keyboard", vendor_id=0xBEEF, product_id=0x0002, dev_path="/dev/hidraw94")
+        with patch("areyoulowbattery.autodetect.scan_unmapped_devices", return_value=[wireless, wired_kb]), \
+             patch("areyoulowbattery.autodetect.load_ignored_devices", return_value=set()), \
+             patch("areyoulowbattery.autodetect.probe_device_protocol_live") as probe:
+            events = det.run([])
+            probe.assert_not_called()  # nothing is ever sent to unknown hardware
+            self.assertEqual(len(events), 1)  # wired keyboard stays silent
+            self.assertEqual(events[0].kind, "unrecognized")
+            self.assertEqual(events[0].product_id, 0x0001)
+            self.assertEqual(det.run([]), [])  # one notification per model, ever
+
+    def test_autodetect_respects_ignored_devices_and_xpad(self):
+        from areyoulowbattery.discovery import DiscoveredDevice
+        det = self._make_detector()
+        hidden = DiscoveredDevice(name="Hidden Mouse", vendor_id=0x1532, product_id=0x0001, dev_path="/dev/hidraw95")
+        pad = DiscoveredDevice(name="Xbox Wireless Receiver", vendor_id=0x045E, product_id=0x02FE, is_xpad=True)
+        with patch("areyoulowbattery.autodetect.scan_unmapped_devices", return_value=[hidden, pad]), \
+             patch("areyoulowbattery.autodetect.load_ignored_devices", return_value={"Hidden Mouse"}), \
+             patch("areyoulowbattery.autodetect.probe_device_protocol_live") as probe:
+            self.assertEqual(det.run([]), [])
+            probe.assert_not_called()
+
+    def test_probe_rejects_cached_readings(self):
+        from areyoulowbattery.discovery import probe_device_protocol, confirm_probe, DiscoveredDevice
+        from areyoulowbattery.models import BatteryStatus
+        dev = DiscoveredDevice(name="Nordic Mouse", vendor_id=0x3554, product_id=0xFA09, dev_path="/dev/hidraw98")
+        cached = BatteryStatus(percentage=70, is_connected=True, details="Cached (30s ago, mouse asleep)")
+        h = MagicMock()
+        h.read_battery.return_value = cached
+        with patch("areyoulowbattery.discovery.enumerate_hidraw", return_value=[]), \
+             patch("areyoulowbattery.discovery.get_handler", return_value=h):
+            # A stale cached value must never count as live communication
+            self.assertIsNone(probe_device_protocol(dev))
+            live = BatteryStatus(percentage=70, is_connected=True, details="Live")
+            h.read_battery.return_value = live
+            res = probe_device_protocol(dev)
+            self.assertEqual(res, ("nordic_v1", 70))
+            h.read_battery.return_value = cached
+            from areyoulowbattery.discovery import ProbeResult
+            self.assertIsNone(confirm_probe(ProbeResult("nordic_v1", 70, MagicMock(), MagicMock())))
+
+    def test_probe_tries_every_hid_node_of_the_device(self):
+        from areyoulowbattery.discovery import probe_device_protocol, DiscoveredDevice
+        dev = DiscoveredDevice(name="Razer Dongle", vendor_id=0x1532, product_id=0x00A6,
+                               dev_path="/dev/hidraw96", interface_number=0)
+        nodes = [
+            HidrawDevice("/dev/hidraw96", 0x1532, 0x00A6, 0, "Razer Dongle"),
+            HidrawDevice("/dev/hidraw97", 0x1532, 0x00A6, 1, "Razer Dongle"),
+        ]
+        def fake_get_handler(proto):
+            h = MagicMock()
+            def read(d, p):
+                from areyoulowbattery.models import BatteryStatus
+                if d.dev_path.endswith("97"):
+                    return BatteryStatus(percentage=66, is_connected=True, details="ok")
+                return None
+            h.read_battery = read
+            return h
+        with patch("areyoulowbattery.discovery.enumerate_hidraw", return_value=nodes), \
+             patch("areyoulowbattery.discovery.get_handler", side_effect=fake_get_handler):
+            self.assertEqual(probe_device_protocol(dev), ("razer_v1", 66))
+
 
 if __name__ == "__main__":
     unittest.main()

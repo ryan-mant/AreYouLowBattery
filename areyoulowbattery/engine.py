@@ -11,8 +11,125 @@ from areyoulowbattery.profile_loader import load_all_profiles
 from areyoulowbattery.handlers import get_handler
 from areyoulowbattery.logger import logger
 
-OVERRIDES_FILE = os.path.expanduser("~/.config/areyoulowbattery/device_overrides.json")
+def _get_config_dir() -> str:
+    config_base = (
+        os.environ.get("LOCALAPPDATA")
+        if sys.platform == "win32"
+        else os.path.expanduser("~/.config")
+    ) or os.path.expanduser("~/.config")
+    d = os.path.join(config_base, "areyoulowbattery")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _get_overrides_path() -> str:
+    return os.path.join(_get_config_dir(), "device_overrides.json")
+
+
+def _get_ignored_devices_path() -> str:
+    return os.path.join(_get_config_dir(), "ignored_devices.json")
+
+
+OVERRIDES_FILE = _get_overrides_path()
 LEGACY_NAMES_FILE = os.path.expanduser("~/.config/areyoulowbattery/device_names.json")
+
+
+def load_ignored_devices() -> set:
+    path = _get_ignored_devices_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(data)
+        except Exception as e:
+            logger.debug("Failed loading ignored devices: %s", e)
+    return set()
+
+
+def save_ignored_devices(ignored: set):
+    path = _get_ignored_devices_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(sorted(list(ignored)), f, indent=2)
+    except Exception as e:
+        logger.debug("Failed saving ignored devices: %s", e)
+
+
+def ignore_device(identifier: str):
+    ignored = load_ignored_devices()
+    ignored.add(identifier)
+    save_ignored_devices(ignored)
+
+
+def unignore_device(identifier: str):
+    ignored = load_ignored_devices()
+    ignored.discard(identifier)
+    save_ignored_devices(ignored)
+
+
+def remove_device(
+    profile_name: str,
+    vid: Optional[int] = None,
+    pid: Optional[int] = None,
+    pids: Optional[List[int]] = None,
+):
+    """
+    Hides/removes a device from the dashboard:
+    1. Adds profile name and specific hardware IDs to ignored_devices.json.
+    2. Deletes user custom YAML file if it was generated in profiles directory.
+    """
+    ignored = load_ignored_devices()
+    ignored.add(profile_name)
+    if vid is not None:
+        if pid is not None:
+            ignored.add(f"{vid:04x}:{pid:04x}")
+        if pids:
+            for p in pids:
+                ignored.add(f"{vid:04x}:{p:04x}")
+    save_ignored_devices(ignored)
+
+    # Check and remove custom YAML profile if present
+    from areyoulowbattery.discovery import get_user_profiles_dir
+    user_dir = get_user_profiles_dir()
+    for fpath in glob.glob(os.path.join(user_dir, "**", "*.yaml"), recursive=True):
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+                if profile_name in content or (vid and f"{vid:04x}" in content.lower()):
+                    os.remove(fpath)
+                    logger.info("Removed custom profile YAML: %s", fpath)
+        except Exception as e:
+            logger.debug("Could not delete custom profile %s: %s", fpath, e)
+
+
+def restore_device(
+    profile_name: str,
+    vid: Optional[int] = None,
+    pid: Optional[int] = None,
+    pids: Optional[List[int]] = None,
+):
+    """Restores/unhides a device that was previously removed."""
+    ignored = load_ignored_devices()
+    ignored.discard(profile_name)
+    if vid is not None:
+        if pid is not None:
+            ignored.discard(f"{vid:04x}:{pid:04x}")
+        if pids:
+            for p in pids:
+                ignored.discard(f"{vid:04x}:{p:04x}")
+        ignored.discard(f"{vid:04x}")
+        # Clean any override custom names associated with this hardware ID
+        try:
+            overrides = load_device_overrides()
+            for key in (f"{vid:04x}:{pid:04x}" if pid else "", f"{vid:04x}"):
+                if key and key in overrides:
+                    ovr = overrides[key].get("name")
+                    if ovr:
+                        ignored.discard(ovr)
+        except Exception:
+            pass
+    save_ignored_devices(ignored)
 
 
 def load_device_overrides() -> Dict[str, dict]:
@@ -24,9 +141,10 @@ def load_device_overrides() -> Dict[str, dict]:
                     overrides[k] = {"name": v}
         except Exception:
             pass
-    if os.path.exists(OVERRIDES_FILE):
+    overrides_file = _get_overrides_path()
+    if os.path.exists(overrides_file):
         try:
-            with open(OVERRIDES_FILE, "r") as f:
+            with open(overrides_file, "r") as f:
                 for k, v in json.load(f).items():
                     if k in overrides:
                         overrides[k].update(v)
@@ -37,7 +155,14 @@ def load_device_overrides() -> Dict[str, dict]:
     return overrides
 
 
-def save_device_override(key: str, name: Optional[str] = None, category: Optional[str] = None, icon: Optional[str] = None):
+def save_device_override(
+    key: str,
+    name: Optional[str] = None,
+    category: Optional[str] = None,
+    icon: Optional[str] = None,
+    protocol: Optional[str] = None,
+    config: Optional[dict] = None,
+):
     overrides = load_device_overrides()
     item = overrides.setdefault(key, {})
     if name is not None:
@@ -49,9 +174,13 @@ def save_device_override(key: str, name: Optional[str] = None, category: Optiona
         item["category"] = category
     if icon is not None:
         item["icon"] = icon
+    if protocol is not None:
+        item["protocol"] = protocol
+    if config is not None:
+        item["config"] = config
 
-    os.makedirs(os.path.dirname(OVERRIDES_FILE), exist_ok=True)
-    with open(OVERRIDES_FILE, "w") as f:
+    overrides_file = _get_overrides_path()
+    with open(overrides_file, "w") as f:
         json.dump(overrides, f, indent=2)
 
 
@@ -61,6 +190,10 @@ def save_custom_name(key: str, custom_name: str):
 
 def save_custom_category(key: str, category: str, icon: str):
     save_device_override(key, category=category, icon=icon)
+
+
+def save_device_protocol(key: str, protocol: str, config: Optional[dict] = None):
+    save_device_override(key, protocol=protocol, config=config)
 
 
 def _infer_category_and_icon(name: str) -> Tuple[DeviceCategory, str]:
@@ -113,11 +246,16 @@ def _infer_bluetooth_icon(name: str) -> Optional[str]:
 
 
 class BatteryEngine:
+    MIN_QUERY_INTERVAL = 5.0  # seconds between hardware queries of the same device (non-forced)
+
     def __init__(self, profiles_dir: Optional[str] = None):
         self.profiles = load_all_profiles(profiles_dir)
         self._smoothed_levels: Dict[str, dict] = {}
         self._win_bt_cache: List[Tuple[str, int, str, Optional[str], Optional[str]]] = []
         self._win_bt_cache_ts: float = 0.0
+        self._offline_devices: Dict[str, Tuple[BatteryStatus, float]] = {}
+        # Per-device rate limiter: last (profile, status, timestamp) of a hardware query.
+        self._recent_queries: Dict[str, Tuple[DeviceProfile, BatteryStatus, float]] = {}
 
     def _filter_battery_jitter(self, key: str, status: BatteryStatus) -> BatteryStatus:
         """
@@ -224,6 +362,15 @@ class BatteryEngine:
                 )
                 overrides = load_device_overrides()
                 vid_key = f"{dev.vendor_id:04x}:{dev.product_id:04x}"
+                ignored = load_ignored_devices()
+                if (
+                    base_name in ignored
+                    or profile.name in ignored
+                    or vid_key in ignored
+                    or f"{dev.vendor_id:04x}" in ignored
+                ):
+                    continue
+
                 ovr = (
                     overrides.get(vid_key)
                     or overrides.get(base_name)
@@ -231,24 +378,31 @@ class BatteryEngine:
                     or {}
                 )
                 final_name = ovr.get("name") or base_name
+                if final_name in ignored:
+                    continue
+
                 final_cat = (
                     DeviceCategory(ovr["category"])
                     if "category" in ovr
                     else profile.category
                 )
                 final_icon = ovr.get("icon") or CATEGORY_ICONS.get(final_cat, profile.icon)
+                final_protocol = ovr.get("protocol") or profile.protocol
+                final_config = ovr.get("config") if "config" in ovr else profile.config
                 if (
                     final_name != profile.name
                     or final_cat != profile.category
                     or final_icon != profile.icon
+                    or final_protocol != profile.protocol
+                    or final_config != profile.config
                 ):
                     return DeviceProfile(
                         name=final_name,
                         category=final_cat,
                         icon=final_icon,
                         match=profile.match,
-                        protocol=profile.protocol,
-                        config=profile.config,
+                        protocol=final_protocol,
+                        config=final_config,
                     )
                 return profile
         return None
@@ -271,7 +425,7 @@ class BatteryEngine:
             import winreg
             base_path = r"SYSTEM\CurrentControlSet\Enum"
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base_path) as enum_key:
-                for bus_name in ("BTHENUM", "BTHLE", "HID"):
+                for bus_name in ("BTHENUM", "BTHLE", "BTHLEDevice", "BTH", "HID"):
                     try:
                         with winreg.OpenKey(enum_key, bus_name) as bus_key:
                             num_devs = winreg.QueryInfoKey(bus_key)[0]
@@ -342,7 +496,7 @@ class BatteryEngine:
                 startupinfo.wShowWindow = subprocess.SW_HIDE
             res = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-                capture_output=True, text=True, timeout=2.5, startupinfo=startupinfo
+                capture_output=True, text=True, timeout=5.0, startupinfo=startupinfo
             )
             for line in res.stdout.splitlines():
                 if "|" in line:
@@ -507,7 +661,8 @@ class BatteryEngine:
             seen_names.add(name)
         return results
 
-    def poll_all_devices(self) -> List[Tuple[DeviceProfile, BatteryStatus]]:
+    def poll_all_devices(self, force: bool = False) -> List[Tuple[DeviceProfile, BatteryStatus]]:
+        ignored = load_ignored_devices()
         connected_hid = enumerate_hidraw()
         results = []
 
@@ -524,28 +679,58 @@ class BatteryEngine:
         for name, dev_list in candidates.items():
             best_profile = None
             best_status = None
-            for profile, dev in dev_list:
-                try:
-                    handler = get_handler(profile.protocol)
-                    status = handler.read_battery(dev, profile)
-                    if status and status.is_connected:
-                        best_profile = profile
-                        best_status = status
-                        if not status.details.startswith("Cached"):
-                            break
-                    elif status and (best_status is None or not best_status.is_connected):
-                        best_profile = profile
-                        best_status = status
-                except Exception as e:
-                    if best_status is None:
-                        best_profile = profile
-                        best_status = BatteryStatus(
-                            percentage=0,
-                            is_connected=False,
-                            details=f"Handler error: {e}"
-                        )
+
+            # Zero-energy passive sleep guard:
+            # If the device was confirmed asleep/offline within the last 5 minutes (300s)
+            # and this is not an explicit user force refresh (e.g. tray click or refresh button),
+            # reuse cached offline status instead of sending active RF pings over USB!
+            if not force and name in self._offline_devices:
+                last_stat, last_ts = self._offline_devices[name]
+                if time.time() - last_ts < 300.0:
+                    best_profile = dev_list[0][0]
+                    best_status = last_stat
+
+            # Per-device rate limit: never hit the same device's hardware more than once
+            # every MIN_QUERY_INTERVAL seconds (hotplug storms, rapid UI events), unless forced.
+            if not force and best_status is None and name in self._recent_queries:
+                r_prof, r_stat, r_ts = self._recent_queries[name]
+                if time.time() - r_ts < self.MIN_QUERY_INTERVAL:
+                    best_profile, best_status = r_prof, r_stat
+
+            if best_status is None:
+                for profile, dev in dev_list:
+                    try:
+                        handler = get_handler(profile.protocol)
+                        status = handler.read_battery(dev, profile)
+                        if status and status.is_connected:
+                            if status.percentage is not None and status.percentage > 0:
+                                best_profile = profile
+                                best_status = status
+                                if not status.details.startswith("Cached"):
+                                    break
+                            elif best_status is None or best_status.percentage is None:
+                                best_profile = profile
+                                best_status = status
+                        elif status and (best_status is None or not best_status.is_connected):
+                            best_profile = profile
+                            best_status = status
+                    except Exception as e:
+                        if best_status is None:
+                            best_profile = profile
+                            best_status = BatteryStatus(
+                                percentage=0,
+                                is_connected=False,
+                                details=f"Handler error: {e}"
+                            )
 
             if best_profile and best_status:
+                if name not in self._recent_queries or self._recent_queries[name][1] is not best_status:
+                    self._recent_queries[name] = (best_profile, best_status, time.time())
+                if not best_status.is_connected:
+                    self._offline_devices[name] = (best_status, time.time())
+                else:
+                    self._offline_devices.pop(name, None)
+
                 results.append((best_profile, best_status))
                 matched_profiles.add(best_profile.name)
 
@@ -592,7 +777,6 @@ class BatteryEngine:
 
             # Check if this peripheral was already listed as "requires_bluetooth" from its 2.4G dongle
             replaced = False
-            import re
             bt_tokens = set(re.findall(r"[a-z0-9]+", bt_name.lower())) | set(re.findall(r"[a-z0-9]+", final_name.lower()))
             for idx, (existing_prof, existing_status) in enumerate(results):
                 # Category guard: Never merge different hardware categories (e.g. Mouse can NEVER replace Keyboard)
@@ -609,39 +793,82 @@ class BatteryEngine:
                     vid and pid and existing_prof.match.vendor_id == vid
                     and (pid in existing_prof.match.product_ids or existing_prof.match.product_id == pid)
                 )
-                if existing_status.requires_bluetooth and (
+                is_same_device = (
                     vid_pid_match
                     or existing_prof.name.lower() in final_name.lower()
                     or final_name.lower() in existing_prof.name.lower()
                     or bool(common_tokens)
-                ):
-                    # Upgrade the 2.4G placeholder to active live Bluetooth telemetry!
-                    upgraded_prof = DeviceProfile(
-                        name=existing_prof.name,
-                        category=existing_prof.category,
-                        icon=existing_prof.icon,
-                        match=existing_prof.match,
-                        protocol="bluetooth",
-                        config=existing_prof.config,
-                    )
-                    results[idx] = (upgraded_prof, bt_status)
-                    matched_profiles.add(existing_prof.name)
-                    matched_profiles.add(final_name)
-                    matched_profiles.add(bt_name)
-                    replaced = True
-                    break
+                )
+                if is_same_device:
+                    if existing_status.requires_bluetooth:
+                        # Upgrade the 2.4G placeholder to active live Bluetooth telemetry!
+                        upgraded_prof = DeviceProfile(
+                            name=existing_prof.name,
+                            category=existing_prof.category,
+                            icon=existing_prof.icon,
+                            match=existing_prof.match,
+                            protocol="bluetooth",
+                            config=existing_prof.config,
+                        )
+                        results[idx] = (upgraded_prof, bt_status)
+                        matched_profiles.add(existing_prof.name)
+                        matched_profiles.add(final_name)
+                        matched_profiles.add(bt_name)
+                        replaced = True
+                        break
+                    elif existing_status.is_connected and existing_status.percentage is not None:
+                        # Direct hardware telemetry (e.g. Pebble K380s HID++ 15%) takes precedence over Windows GATT cache
+                        matched_profiles.add(existing_prof.name)
+                        matched_profiles.add(final_name)
+                        matched_profiles.add(bt_name)
+                        replaced = True
+                        break
+                    elif not existing_status.is_connected and bt_pct > 0:
+                        results[idx] = (existing_prof, bt_status)
+                        matched_profiles.add(existing_prof.name)
+                        matched_profiles.add(final_name)
+                        matched_profiles.add(bt_name)
+                        replaced = True
+                        break
 
-            if not replaced and final_name not in matched_profiles:
+            if not replaced and final_name not in matched_profiles and final_name not in ignored and bt_name not in ignored:
                 results.append((bt_profile, bt_status))
                 matched_profiles.add(final_name)
                 matched_profiles.add(bt_name)
 
         results.extend(self._poll_sysfs_peripheral_batteries(matched_profiles))
 
-        # Apply anti-jitter smoothing filter to eliminate voltage sag bounces
+        # Apply anti-jitter smoothing filter to eliminate voltage sag bounces and filter ignored
         smoothed = []
         for prof, stat in results:
+            vid_key = f"{prof.match.vendor_id:04x}:{prof.match.product_id or 0:04x}"
+            if prof.name in ignored or vid_key in ignored or f"{prof.match.vendor_id:04x}" in ignored:
+                continue
             key = f"{prof.name}:{prof.match.vendor_id:04x}:{prof.match.product_id or 0:04x}"
             filtered_stat = self._filter_battery_jitter(key, stat)
             smoothed.append((prof, filtered_stat))
-        return smoothed
+
+        # Deduplicate multiple endpoints of the exact same physical peripheral (e.g. 2.4G dongle + wired USB mode of same keyboard)
+        deduped: List[Tuple[DeviceProfile, BatteryStatus]] = []
+        for prof, stat in smoothed:
+            merged = False
+            prof_tokens = set(re.findall(r"[a-z0-9]+", prof.name.lower())) - {
+                "keyboard", "mouse", "headset", "controller", "dongle", "wireless", "2", "4g", "usb", "dual", "mode"
+            }
+            for idx, (existing_prof, existing_stat) in enumerate(deduped):
+                if existing_prof.category != prof.category:
+                    continue
+                ex_tokens = set(re.findall(r"[a-z0-9]+", existing_prof.name.lower())) - {
+                    "keyboard", "mouse", "headset", "controller", "dongle", "wireless", "2", "4g", "usb", "dual", "mode"
+                }
+                common = prof_tokens & ex_tokens
+                if common and (prof_tokens.issubset(ex_tokens) or ex_tokens.issubset(prof_tokens) or len(common) >= 2):
+                    # Same physical peripheral! Keep whichever endpoint has live telemetry (real % > requires_bt)
+                    if (existing_stat.percentage is None or existing_stat.requires_bluetooth) and stat.percentage is not None:
+                        deduped[idx] = (prof, stat)
+                    merged = True
+                    break
+            if not merged:
+                deduped.append((prof, stat))
+
+        return deduped

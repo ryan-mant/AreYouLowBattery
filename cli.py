@@ -255,12 +255,14 @@ def cmd_install():
     service_content = f"""[Unit]
 Description=AreYouLowBattery - Wireless Peripheral Battery Monitor & System Tray
 After=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 ExecStart={exec_start}
-Restart=always
-RestartSec=3
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=default.target
@@ -411,6 +413,12 @@ def main():
         help="Run System Tray icon + background cache daemon"
     )
     parser.add_argument(
+        "--show", "--open",
+        dest="show",
+        action="store_true",
+        help="Immediately show the dashboard flyout on startup"
+    )
+    parser.add_argument(
         "--poll",
         action="store_true",
         help="Force direct hardware poll ignoring cache"
@@ -452,9 +460,9 @@ def main():
             "--all", "-a", "--install-rules", "--debug", "--diag", "install", "uninstall", "daemon"
         ]
     )
-    if not is_cli_query or args.tray or args.action == "tray":
+    if not is_cli_query or args.tray or args.show or args.action == "tray":
         from areyoulowbattery.tray import run_tray
-        run_tray()
+        run_tray(auto_show=args.show or (not is_cli_query and not args.tray))
         return
 
     if args.action == "install":

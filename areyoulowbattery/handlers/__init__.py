@@ -14,6 +14,7 @@ HANDLER_REGISTRY: Dict[str, Type[BaseProtocolHandler]] = {
     "compx_v1": CompXHandler,
     "actions_v1": ActionsHandler,
     "nordic_v1": NordicHandler,
+    "hidpp_v1": LogitechHidppHandler,
     "hidpp_v2": LogitechHidppHandler,
     "razer_v1": RazerHandler,
     "steelseries_v1": SteelSeriesHandler,

@@ -168,6 +168,50 @@ class LogitechHidppHandler(BaseProtocolHandler):
             return (0xFF, 0, 0)
         return None
 
+    def _transceive_hidpp_10(
+        self, transport: HidrawTransport, dev_idx: int, reg_type: int, reg_addr: int
+    ) -> Optional[bytes]:
+        pkt = bytes([0x10, dev_idx, reg_type, reg_addr, 0x00, 0x00, 0x00])
+        try:
+            transport.write_output_report(pkt)
+        except Exception as e:
+            logger.debug("HID++ 1.0 write report failed: %s", e)
+            return None
+
+        deadline = time.time() + 0.18
+        while time.time() < deadline:
+            rx = transport.read_input_report(
+                length=64,
+                timeout_sec=min(0.08, max(0.01, deadline - time.time()))
+            )
+            if not rx or len(rx) < 7:
+                continue
+            if rx[0] == 0x10 and rx[1] == dev_idx and rx[2] == 0x8F:
+                return None
+            if rx[0] == 0x10 and rx[1] == dev_idx and rx[2] == reg_type and rx[3] == reg_addr:
+                return rx
+        return None
+
+    def _read_hidpp_10_battery(
+        self, transport: HidrawTransport
+    ) -> Optional[Tuple[int, bool, str]]:
+        for dev_idx in (0x01, 0x02, 0xFF):
+            # 1. Register 0x0D: Battery Mileage (percentage directly in params[0] / rx[4])
+            rx = self._transceive_hidpp_10(transport, dev_idx, 0x81, 0x0D)
+            if rx and len(rx) >= 5 and 0 <= rx[4] <= 100 and rx[4] != 0:
+                pct = rx[4]
+                is_charging = len(rx) > 6 and (rx[6] & 0x07) in (1, 2)
+                return (pct, is_charging, f"HID++ 1.0 Mileage (Reg 0x0D dev {dev_idx}): {rx.hex()}")
+
+            # 2. Register 0x07: Battery Status (level 1..4 in params[0] / rx[4])
+            rx = self._transceive_hidpp_10(transport, dev_idx, 0x80, 0x07)
+            if rx and len(rx) >= 5 and rx[4] in (1, 2, 3, 4):
+                level_map = {1: 5, 2: 20, 3: 55, 4: 90}
+                pct = level_map[rx[4]]
+                is_charging = len(rx) > 5 and bool(rx[5] & 0x20)
+                return (pct, is_charging, f"HID++ 1.0 Status (Reg 0x07 dev {dev_idx}): {rx.hex()}")
+        return None
+
     def read_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> Optional[BatteryStatus]:
         # Fast path: known corded / wired Logitech peripherals without battery
         if dev.product_id in LOGITECH_WIRED_PIDS or profile.config.get("is_wired"):
@@ -219,6 +263,21 @@ class LogitechHidppHandler(BaseProtocolHandler):
                         self._feature_cache[candidate.dev_path] = info
 
                 if not info:
+                    # Fallback to HID++ 1.0 (legacy Nano Receiver / budget battery mice)
+                    hidpp10_res = self._read_hidpp_10_battery(transport)
+                    if hidpp10_res:
+                        pct, is_charging, details = hidpp10_res
+                        self._write_cache(profile, {
+                            "percentage": pct,
+                            "is_charging": is_charging,
+                            "raw": details,
+                        }, dev)
+                        return BatteryStatus(
+                            percentage=pct,
+                            is_charging=is_charging,
+                            is_connected=True,
+                            details=details,
+                        )
                     continue
 
                 dev_idx, feat_idx, feat_id = info
