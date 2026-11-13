@@ -4,6 +4,63 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.5.3] — 2026-11-13 — Dashboard Auto-Launch, Device Removal, Dynamic Protocols & Windows Diagnostic Fixes
+
+### ✨ Major New Features
+- **Dashboard Auto-Launch Post-Installation & Double-Click:**
+  - Added `--show` / `--open` CLI flags allowing direct activation of the dashboard flyout.
+  - Windows installer now launches with `--tray --show` upon completion, opening the telemetry dashboard immediately for instant visual feedback.
+  - Added optional Windows desktop icon shortcut configured with `--tray --show`.
+  - Windows autostart at system boot (`{userstartup}`) remains strictly silent in the background with `--tray`.
+- **Remove / Hide Devices:**
+  - Added "Remove device..." option available directly from individual peripheral cards (••• menu) and the System Tray context menu.
+  - Automatically registers unwanted hardware in `ignored_devices.json` and deletes any corresponding user-generated custom YAML profile in `profiles/`.
+- **Zero-Config Device Auto-Detection:**
+  - Plug in a new peripheral and it is identified automatically on hotplug / app start — no menus required.
+  - Known vendor families (Logitech, Razer, SteelSeries, Corsair, HyperX, CompX, Nordic, Actions) are probed with their own protocols only; a profile is created automatically only after **one live probe plus one confirmation re-read** on the same HID node (cached/asleep values are rejected), and a tray notification explains what was set up.
+  - Unknown vendors are **never written to**: if the device looks wireless, a single "Unrecognized device — click to identify" notification opens the Find Device assistant.
+  - Each model (VID:PID) is remembered in `auto_detect_state.json`, so it is never probed or announced twice; failed probes (one probe each, never re-probed within an attempt) retry at most 3 times (5 min apart) in case the mouse was asleep.
+  - Probes now try every HID interface of the dongle instead of only the first node.
+- **Refined Dashboard & Dialog UX:**
+  - Separated Dashboard settings from tray menu: the gear icon (⚙) now cleanly displays global application actions only (*Start with system*, *Export log*, *Check updates*, *Quit*), removing redundant per-card actions.
+  - Per-device actions (*Rename*, *Change protocol*, *Change type*, *Remove*) live strictly on each device card's `•••` menu.
+  - Dashboard now smoothly remains active or reopens automatically after interacting with modal dialogs (*Rename*, *Protocol*, *Find Devices*, *Remove*), so users never need to re-click the tray icon.
+- **Dynamic Protocol & Connection Switching:**
+  - Users can now change a peripheral's protocol directly from the card action menu (•••) or tray menu (e.g., switch between CompX, Nordic 4K/8K, Logitech HID++ 1.0/2.0, Razer, SteelSeries, Corsair, HyperX, Generic HID, Requires Bluetooth, or Wired USB) with immediate live recalculation of telemetry.
+  - Protocol changes are persisted in `device_overrides.json` or custom YAML without manual text editing.
+
+### 🐛 Bug Fixes & Hardware Compatibility
+- **Zero-Energy Passive Hardware Sleep Guard:**
+  - Implemented an intelligent sleep guard that completely stops background 2.4GHz RF polling when a peripheral enters deep sleep or is turned off, preventing transceiver wake-ups and eliminating unnecessary battery drain.
+  - Telemetry is queried purely on-demand when opening the dashboard flyout, clicking tray refresh, or on physical USB connection changes.
+- **Updater Security Hardening & SHA-256 Verification:**
+  - Removed insecure unverified TLS fallbacks. Enforced strict certificate validation using system Root CA stores (`ssl.enum_certificates`) and `certifi`.
+  - Added cryptographic SHA-256 checksum verification during binary update downloads to guarantee file integrity before execution.
+- **Vendor Protocol Isolation in Device Discovery:**
+  - Restricted protocol probes strictly by USB Vendor ID (`0x046D` only tests Logitech, `0x1532` only tests Razer, etc.), guaranteeing that foreign vendor-specific frames are never sent to incompatible peripherals.
+- **Logitech HID++ 1.0 Support for Legacy Nano Receivers (`046d:c534`):**
+  - Added support for legacy Logitech Nano Receivers (M185, M220, M330, MK270) that do not implement HID++ 2.0 IRoot feature discovery.
+  - Implemented Short Report `0x10` queries using register `0x0D` (Battery Mileage percentage) and register `0x07` (Battery Status levels) across receiver slots 0x01 and 0x02.
+- **Pebble K380s BLE & HID++ Deduplication:**
+  - Unified Windows Bluetooth BLE (`BTHLEDevice`) and Logitech HID++ dual endpoints of the same peripheral into a single clean card, preventing bouncing battery percentages and duplicate cards.
+  - Direct hardware register telemetry (e.g. 15% SoC) takes precedence over stale Windows GATT battery cache (95%).
+- **Discovery Assistant Hardware Filters:**
+  - Internal laptop hardware without batteries is now automatically filtered out of discovery: ignored Goodix touchpads (`0x27C6`), Dell I2C touchpads (`HIDI2C Device`), and Microsoft virtual devices (`ConvertedDevice` PID `0x0000`).
+  - Fallback suggested category for unidentified peripherals changed from `🎮 Gamepad` to `🔋 Other`.
+- **System Service & Cache Hardening:**
+  - Updated `systemd/areyoulowbattery.service` template to use standard `%h/.local/bin/areyoulowbattery --tray` instead of development folder paths.
+  - Restricted shared memory telemetry cache files (`/dev/shm/areyoulowbattery*`) to `0600` permissions (owner read/write only).
+- **Second Security Review Hardening:**
+  - **Mandatory update checksum:** the updater now refuses to download/run any installer unless a trusted SHA-256 is published (GitHub `assets[].digest` first, release notes as fallback). Releases without a checksum open the release page for manual download instead.
+  - **Safer download location:** updates are saved in a private `0700` temporary directory with a sanitized filename (no path traversal or predictable `/tmp` collisions).
+  - **Passive discovery for unknown vendors:** unidentified hardware is now probed only with the read-only standard HID handler; vendor-specific write protocols (CompX/Nordic) are never guessed (use "Change protocol..." manually).
+  - **Read-only Generic HID:** the generic handler opens devices with `O_RDONLY`.
+  - **Per-device query rate limit:** the same device's hardware is queried at most once every 5 seconds unless the user explicitly refreshes.
+  - **systemd:** `Restart=on-failure` (a clean Quit no longer respawns the app) with `StartLimitBurst=5` per 120s to stop crash loops.
+  - **Tests:** added `tests/__init__.py` so `python -m unittest` discovers the suite; added a `dev` extra with `pytest`.
+
+---
+
 ## [v0.5.2] — 2026-11-12 — Windows Updater GC Stability & Native Autostart Shortcut
 
 ### 🐛 Bug Fixes & Stability Improvements
