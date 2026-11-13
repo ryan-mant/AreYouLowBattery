@@ -17,6 +17,7 @@ from areyoulowbattery.engine import BatteryEngine
 from areyoulowbattery.transport import enumerate_hidraw
 from areyoulowbattery.profile_loader import get_resource_dir
 from areyoulowbattery.models import DeviceProfile, BatteryStatus, DeviceCategory, DeviceMatch
+from areyoulowbattery.clean_env import get_clean_env
 
 CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
 CACHE_FILE = os.path.join(CACHE_DIR, "areyoulowbattery_status.json")
@@ -228,9 +229,10 @@ def cmd_install():
 
     if need_udev and os.path.exists(rules_src):
         print("[1/3] Installing USB permission rules (udev)...")
-        subprocess.run(["sudo", "cp", rules_src, rules_dst], check=True)
-        subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=True)
-        subprocess.run(["sudo", "udevadm", "trigger"], check=True)
+        clean_env = get_clean_env()
+        subprocess.run(["sudo", "cp", rules_src, rules_dst], check=True, env=clean_env)
+        subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=True, env=clean_env)
+        subprocess.run(["sudo", "udevadm", "trigger"], check=True, env=clean_env)
 
     # Determine ExecStart command (standalone binary vs python script)
     if getattr(sys, "frozen", False):
@@ -271,9 +273,10 @@ WantedBy=default.target
         f.write(service_content)
 
     print("[3/3] Enabling and starting systemd --user service...")
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "--user", "enable", "--now", "areyoulowbattery.service"], check=True)
-    subprocess.run(["systemctl", "--user", "restart", "areyoulowbattery.service"], check=True)
+    clean_env = get_clean_env()
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, env=clean_env)
+    subprocess.run(["systemctl", "--user", "enable", "--now", "areyoulowbattery.service"], check=True, env=clean_env)
+    subprocess.run(["systemctl", "--user", "restart", "areyoulowbattery.service"], check=True, env=clean_env)
     print("\n✅ Done! The battery icon is now active in your System Tray.")
 
 
@@ -309,12 +312,13 @@ def cmd_uninstall():
 
     # 1. Stop and disable systemd user service
     print("[1/4] Stopping and disabling systemd service...")
-    subprocess.run(["systemctl", "--user", "stop", "areyoulowbattery.service"], check=False)
-    subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=False)
+    clean_env = get_clean_env()
+    subprocess.run(["systemctl", "--user", "stop", "areyoulowbattery.service"], check=False, env=clean_env)
+    subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=False, env=clean_env)
     service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
     if os.path.exists(service_path):
         os.remove(service_path)
-    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False, env=clean_env)
 
     # 2. Remove installed binary in ~/.local/bin if present
     print("[2/4] Removing binary from ~/.local/bin...")
@@ -344,10 +348,10 @@ def cmd_uninstall():
     if os.path.exists(udev_path):
         print(f"[4/4] Removing {udev_path}...")
         try:
-            res = subprocess.run(["sudo", "rm", "-f", udev_path], check=False)
+            res = subprocess.run(["sudo", "rm", "-f", udev_path], check=False, env=clean_env)
             if res.returncode == 0:
-                subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=False)
-                subprocess.run(["sudo", "udevadm", "trigger"], check=False)
+                subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=False, env=clean_env)
+                subprocess.run(["sudo", "udevadm", "trigger"], check=False, env=clean_env)
                 print("  Udev rules removed.")
         except Exception:
             print(f"  Note: To remove udev rules manually, run: sudo rm {udev_path}")

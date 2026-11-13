@@ -4,6 +4,29 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.5.3.1] — 2026-11-13 — Bluetooth GATT Authority, Logitech Nano Receiver & Linux Subprocess Isolation
+
+### 🐛 Bug Fixes & Hardware Stability
+- **Bluetooth GATT Telemetry Authority (Resolved 15% vs 95% Bug):**
+  - Enforced operating system Bluetooth GATT battery telemetry as authoritative over unverified HID probes.
+  - On Windows, Bluetooth LE HID nodes are no longer claimed by 2.4GHz Lightspeed profiles (`logitech_hidpp.yaml`), preventing erroneous byte interpretations from overriding real battery percentages.
+  - Automatically merges and upgrades placeholder devices (such as `requires_bluetooth` Pebble Keys 2 K380s) to active keyboard telemetry with live battery levels.
+- **Logitech HID++ 1.0 Nano Receiver Fix for Windows (Resolved M170 "Disconnected"):**
+  - Removed blind `usage_page < 0xFF00` restriction on Windows for legacy Logitech Nano Receivers (`046d:c534`, M170, M185, M220, MK270).
+  - Telemetry is now queried via short report `0x10` registers `0x0D` and `0x07` on standard mouse collections without false "Disconnected / Deep Sleep" states.
+- **Device Removal & "Find Devices" Restoration Fixes:**
+  - Fixed unconditional filtering in `scan_unmapped_devices` so previously ignored/removed peripherals properly appear in the Find Devices assistant with a functional one-click "Restore Device" button.
+  - Integrated connected Bluetooth devices into the Find Devices scanner.
+  - Synchronized peripheral removal across profile names, Bluetooth friendly names, and hardware IDs to prevent removed devices from immediately respawning in the system tray menu.
+- **Linux Subprocess Environment Sanitization (`clean_env`):**
+  - Sanitized `LD_LIBRARY_PATH` across all system subprocess invocations (`systemctl`, `udevadm`, `sudo`, `paplay`, `bluetoothctl`).
+  - Resolves `systemctl: ... version OPENSSL_3.4.0 not found` and `bluetoothctl` SIGABRT dynamic linker conflicts when running PyInstaller standalone binaries on modern Linux distributions (Fedora, Nobara, Arch, openSUSE).
+- **Native Vector Icons & Wayland Stability (Resolved Empty Box & Segfaults):**
+  - Introduced resolution-independent vector icons rendered via `QPainter` for peripheral categories and dashboard buttons (Find Devices, Refresh, Settings, Close), eliminating missing glyphs and empty boxes (tofu □) caused by COLRv1 color emoji incompatibility in Qt on modern Linux.
+  - Hardened Wayland window dragging and dynamic card rebuilding to prevent PySide6 SIGSEGV crashes while interacting with popup menus.
+
+---
+
 ## [v0.5.3] — 2026-11-13 — Dashboard Auto-Launch, Device Removal, Dynamic Protocols & Windows Diagnostic Fixes
 
 ### ✨ Major New Features

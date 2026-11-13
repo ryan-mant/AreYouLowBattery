@@ -83,14 +83,22 @@ def is_device_ignored(name: str, vid: int, pid: int = 0) -> bool:
 
 
 def is_profile_already_mapped(
-    vid: int, pid: int, profiles: List[DeviceProfile], ignored: Optional[set] = None
+    vid: int,
+    pid: int,
+    profiles: List[DeviceProfile],
+    ignored: Optional[set] = None,
+    dev_name: Optional[str] = None,
 ) -> bool:
     from areyoulowbattery.engine import load_device_overrides
     overrides = load_device_overrides() if ignored is not None else {}
     vid_key = f"{vid:04x}:{pid:04x}"
 
     if ignored is not None:
-        if vid_key in ignored:
+        if (
+            vid_key in ignored
+            or f"{vid:04x}" in ignored
+            or (dev_name and dev_name in ignored)
+        ):
             return False  # Device is currently ignored/hidden, so it should be visible in Find Devices to restore!
 
     for p in profiles:
@@ -106,7 +114,13 @@ def is_profile_already_mapped(
             if has_match:
                 if ignored is not None:
                     ovr_name = overrides.get(p.name, {}).get("name") or overrides.get(vid_key, {}).get("name")
-                    if p.name in ignored or (ovr_name and ovr_name in ignored):
+                    if (
+                        p.name in ignored
+                        or (ovr_name and ovr_name in ignored)
+                        or (dev_name and dev_name in ignored)
+                        or vid_key in ignored
+                        or f"{vid:04x}" in ignored
+                    ):
                         continue
                 return True
     return False
@@ -127,9 +141,9 @@ def scan_unmapped_devices(
     # 1. Scan /dev/hidraw nodes
     hid_nodes = enumerate_hidraw()
     for dev in hid_nodes:
-        if is_device_ignored(dev.name, dev.vendor_id, dev.product_id):
+        if not include_ignored and is_device_ignored(dev.name, dev.vendor_id, dev.product_id):
             continue
-        if is_profile_already_mapped(dev.vendor_id, dev.product_id, profiles, ignored=ignored):
+        if is_profile_already_mapped(dev.vendor_id, dev.product_id, profiles, ignored=ignored, dev_name=dev.name):
             continue
         key = (dev.vendor_id, dev.product_id)
         if key not in candidates:
@@ -153,31 +167,38 @@ def scan_unmapped_devices(
             if not (os.path.exists(v_file) and os.path.exists(p_file)):
                 continue
             try:
-                vid = int(open(v_file).read().strip(), 16)
-                pid = int(open(p_file).read().strip(), 16)
+                with open(v_file, "r") as vf, open(p_file, "r") as pf:
+                    vid = int(vf.read().strip(), 16)
+                    pid = int(pf.read().strip(), 16)
             except Exception:
                 continue
 
             prod_file = os.path.join(u_dir, "product")
-            name = (
-                open(prod_file).read().strip()
-                if os.path.exists(prod_file)
-                else f"USB Device 0x{vid:04x}:0x{pid:04x}"
-            )
+            name = None
+            if os.path.exists(prod_file):
+                try:
+                    with open(prod_file, "r") as prf:
+                        name = prf.read().strip()
+                except Exception:
+                    pass
+            if not name:
+                name = f"USB Device 0x{vid:04x}:0x{pid:04x}"
+
             # If product string is generic (e.g. "IDLE"), try reading xpad input name
             if name.lower() in ("idle", "unknown", "") or name.startswith("USB Device"):
                 for in_name in glob.glob(f"{u_dir}/*:*/input/input*/name"):
                     try:
-                        n = open(in_name).read().strip()
+                        with open(in_name, "r") as inf:
+                            n = inf.read().strip()
                         if n:
                             name = n
                             break
                     except Exception:
                         pass
 
-            if is_device_ignored(name, vid, pid):
+            if not include_ignored and is_device_ignored(name, vid, pid):
                 continue
-            if is_profile_already_mapped(vid, pid, profiles, ignored=ignored):
+            if is_profile_already_mapped(vid, pid, profiles, ignored=ignored, dev_name=name):
                 continue
 
             key = (vid, pid)
@@ -211,6 +232,33 @@ def scan_unmapped_devices(
                     suggested_category=cat,
                     suggested_icon=icon,
                 )
+
+    # 3. Scan connected Bluetooth devices (Windows Registry/PnP, BlueZ D-Bus, UPower)
+    try:
+        from areyoulowbattery.engine import BatteryEngine, _parse_modalias_vid_pid
+        eng = BatteryEngine()
+        bt_devs = eng._poll_bluetooth_peripheral_batteries()
+        for bt_name, bt_pct, bt_source, bt_modalias, bt_icon in bt_devs:
+            vid, pid = _parse_modalias_vid_pid(bt_modalias) if bt_modalias else (0, 0)
+            if not include_ignored and is_device_ignored(bt_name, vid or 0, pid or 0):
+                continue
+            if vid and pid and is_profile_already_mapped(vid, pid, profiles, ignored=ignored, dev_name=bt_name):
+                continue
+            key = (vid or 0, pid or (hash(bt_name) & 0xFFFF))
+            if key not in candidates:
+                cat, icon = _infer_category_and_icon(bt_name)
+                candidates[key] = DiscoveredDevice(
+                    name=bt_name,
+                    vendor_id=vid or 0,
+                    product_id=pid or 0,
+                    interface_number=None,
+                    dev_path=None,
+                    is_xpad=False,
+                    suggested_category=cat,
+                    suggested_icon=icon,
+                )
+    except Exception as e:
+        logger.debug("Bluetooth discovery scan failed: %s", e)
 
     return list(candidates.values())
 

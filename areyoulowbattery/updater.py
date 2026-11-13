@@ -474,7 +474,8 @@ class UpdateDialog(QDialog):
                     shutil.copy2(local_path, target_bin)
                     os.chmod(target_bin, 0o755)
                     # Restart systemd user service if running
-                    subprocess.run(["systemctl", "--user", "restart", "areyoulowbattery.service"], check=False)
+                    from areyoulowbattery.clean_env import get_clean_env
+                    subprocess.run(["systemctl", "--user", "restart", "areyoulowbattery.service"], check=False, env=get_clean_env())
                     QMessageBox.information(
                         self,
                         "Update Installed",

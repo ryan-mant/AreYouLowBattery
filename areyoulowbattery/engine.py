@@ -87,6 +87,15 @@ def remove_device(
         if pids:
             for p in pids:
                 ignored.add(f"{vid:04x}:{p:04x}")
+    try:
+        overrides = load_device_overrides()
+        for k, v in overrides.items():
+            if v.get("name") == profile_name or (vid and f"{vid:04x}" in k):
+                ignored.add(k)
+                if v.get("name"):
+                    ignored.add(v["name"])
+    except Exception:
+        pass
     save_ignored_devices(ignored)
 
     # Check and remove custom YAML profile if present
@@ -129,6 +138,17 @@ def restore_device(
                         ignored.discard(ovr)
         except Exception:
             pass
+    # Also clean any token-matched entries from ignored
+    p_tokens = set(re.findall(r"[a-z0-9]+", profile_name.lower())) - {"keyboard", "mouse", "headset", "bt", "2", "4g", "pro", "dual", "mode"}
+    if p_tokens:
+        to_discard = set()
+        for item in ignored:
+            if ":" not in item:
+                i_tokens = set(re.findall(r"[a-z0-9]+", item.lower())) - {"keyboard", "mouse", "headset", "bt", "2", "4g", "pro", "dual", "mode"}
+                if i_tokens and (i_tokens == p_tokens or i_tokens.issubset(p_tokens) or p_tokens.issubset(i_tokens)):
+                    to_discard.add(item)
+        for d in to_discard:
+            ignored.discard(d)
     save_ignored_devices(ignored)
 
 
@@ -345,6 +365,14 @@ class BatteryEngine:
                 match = profile.match
                 if match.vendor_id != dev.vendor_id:
                     continue
+                if sys.platform == "win32":
+                    lower_path = (dev.dev_path or "").lower()
+                    if (
+                        "bth" in lower_path
+                        or "{00001124" in lower_path
+                        or "{00001812" in lower_path
+                    ) and profile.protocol != "bluetooth":
+                        continue
                 has_pid = bool(match.product_ids or match.product_id is not None)
                 if require_pid != has_pid:
                     continue
@@ -389,18 +417,24 @@ class BatteryEngine:
                 final_icon = ovr.get("icon") or CATEGORY_ICONS.get(final_cat, profile.icon)
                 final_protocol = ovr.get("protocol") or profile.protocol
                 final_config = ovr.get("config") if "config" in ovr else profile.config
+                target_match = DeviceMatch(
+                    vendor_id=dev.vendor_id,
+                    product_id=dev.product_id,
+                    interface_number=profile.match.interface_number if profile.match.interface_number is not None else dev.interface_number,
+                )
                 if (
                     final_name != profile.name
                     or final_cat != profile.category
                     or final_icon != profile.icon
                     or final_protocol != profile.protocol
                     or final_config != profile.config
+                    or profile.match.product_id != dev.product_id
                 ):
                     return DeviceProfile(
                         name=final_name,
                         category=final_cat,
                         icon=final_icon,
-                        match=profile.match,
+                        match=target_match,
                         protocol=final_protocol,
                         config=final_config,
                     )
@@ -415,7 +449,7 @@ class BatteryEngine:
         Cached for 15s to guarantee 0.0% CPU overhead.
         """
         now = time.time()
-        if now - self._win_bt_cache_ts < 15.0 and self._win_bt_cache:
+        if now - self._win_bt_cache_ts < 30.0 and self._win_bt_cache:
             return self._win_bt_cache
 
         results = []
@@ -453,7 +487,19 @@ class BatteryEngine:
                                                     ):
                                                         try:
                                                             with winreg.OpenKey(inst_key, prop_sub) as prop_key:
-                                                                val, _ = winreg.QueryValueEx(prop_key, "")
+                                                                val = None
+                                                                for val_name in ("", "Data"):
+                                                                    try:
+                                                                        val, _ = winreg.QueryValueEx(prop_key, val_name)
+                                                                        if val is not None:
+                                                                            break
+                                                                    except OSError:
+                                                                        pass
+                                                                if val is None:
+                                                                    try:
+                                                                        _, val, _ = winreg.EnumValue(prop_key, 0)
+                                                                    except OSError:
+                                                                        pass
                                                                 pct = None
                                                                 if isinstance(val, (int, float)):
                                                                     pct = int(val)
@@ -478,12 +524,11 @@ class BatteryEngine:
         except Exception as e:
             logger.debug("Windows registry Bluetooth query failed: %s", e)
 
-        # 2. Fallback: PowerShell PnP query
+        # 2. Fallback: PowerShell PnP query (queries active peripheral PnP devices exposing battery property)
         try:
             import subprocess
             ps_script = (
-                "Get-PnpDevice -Status OK -ErrorAction SilentlyContinue | "
-                "Where-Object { $_.InstanceId -match 'BTH' } | "
+                "Get-PnpDevice -Class 'Bluetooth', 'HIDClass', 'Battery', 'Mouse', 'Keyboard' -Status OK -ErrorAction SilentlyContinue | "
                 "ForEach-Object { "
                 "$prop = $_ | Get-PnpDeviceProperty -KeyName '{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2' -ErrorAction SilentlyContinue; "
                 "if ($prop -and $prop.Data -ne $null) { \"$($_.FriendlyName)|$($prop.Data)\" } "
@@ -496,7 +541,7 @@ class BatteryEngine:
                 startupinfo.wShowWindow = subprocess.SW_HIDE
             res = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
-                capture_output=True, text=True, timeout=5.0, startupinfo=startupinfo
+                capture_output=True, text=True, timeout=8.0, startupinfo=startupinfo
             )
             for line in res.stdout.splitlines():
                 if "|" in line:
@@ -572,9 +617,11 @@ class BatteryEngine:
         # 3. Fallback: bluetoothctl CLI
         try:
             import subprocess
+            from areyoulowbattery.clean_env import get_clean_env
+            clean_env = get_clean_env()
             out = subprocess.run(
                 ["bluetoothctl", "devices", "Connected"],
-                capture_output=True, text=True, timeout=1.0
+                capture_output=True, text=True, timeout=1.0, env=clean_env
             )
             for line in out.stdout.splitlines():
                 parts = line.strip().split(maxsplit=2)
@@ -582,7 +629,7 @@ class BatteryEngine:
                     mac, dev_name = parts[1], parts[2]
                     info_out = subprocess.run(
                         ["bluetoothctl", "info", mac],
-                        capture_output=True, text=True, timeout=1.0
+                        capture_output=True, text=True, timeout=1.0, env=clean_env
                     )
                     modalias = None
                     icon_hint = None
@@ -775,18 +822,10 @@ class BatteryEngine:
                 details=f"Connected via Bluetooth ({bt_source})",
             )
 
-            # Check if this peripheral was already listed as "requires_bluetooth" from its 2.4G dongle
+            # Check if this peripheral was already listed as "requires_bluetooth" from its 2.4G dongle or placeholder
             replaced = False
             bt_tokens = set(re.findall(r"[a-z0-9]+", bt_name.lower())) | set(re.findall(r"[a-z0-9]+", final_name.lower()))
             for idx, (existing_prof, existing_status) in enumerate(results):
-                # Category guard: Never merge different hardware categories (e.g. Mouse can NEVER replace Keyboard)
-                if (
-                    existing_prof.category != DeviceCategory.OTHER
-                    and final_cat != DeviceCategory.OTHER
-                    and existing_prof.category != final_cat
-                ):
-                    continue
-
                 ex_tokens = set(re.findall(r"[a-z0-9]+", existing_prof.name.lower()))
                 common_tokens = (bt_tokens & ex_tokens) - {"keyboard", "mouse", "headset", "bt", "bt5", "bt50", "2", "4g", "pro", "dual", "mode"}
                 vid_pid_match = bool(
@@ -799,37 +838,39 @@ class BatteryEngine:
                     or final_name.lower() in existing_prof.name.lower()
                     or bool(common_tokens)
                 )
+
+                # Category guard: Never merge completely different hardware categories UNLESS
+                # the existing card is a requires_bluetooth placeholder where user/auto-detect picked a default category.
+                if (
+                    not is_same_device
+                    or (
+                        existing_prof.category != DeviceCategory.OTHER
+                        and final_cat != DeviceCategory.OTHER
+                        and existing_prof.category != final_cat
+                        and not existing_status.requires_bluetooth
+                    )
+                ):
+                    continue
+
                 if is_same_device:
-                    if existing_status.requires_bluetooth:
-                        # Upgrade the 2.4G placeholder to active live Bluetooth telemetry!
-                        upgraded_prof = DeviceProfile(
-                            name=existing_prof.name,
-                            category=existing_prof.category,
-                            icon=existing_prof.icon,
-                            match=existing_prof.match,
-                            protocol="bluetooth",
-                            config=existing_prof.config,
-                        )
-                        results[idx] = (upgraded_prof, bt_status)
-                        matched_profiles.add(existing_prof.name)
-                        matched_profiles.add(final_name)
-                        matched_profiles.add(bt_name)
-                        replaced = True
-                        break
-                    elif existing_status.is_connected and existing_status.percentage is not None:
-                        # Direct hardware telemetry (e.g. Pebble K380s HID++ 15%) takes precedence over Windows GATT cache
-                        matched_profiles.add(existing_prof.name)
-                        matched_profiles.add(final_name)
-                        matched_profiles.add(bt_name)
-                        replaced = True
-                        break
-                    elif not existing_status.is_connected and bt_pct > 0:
-                        results[idx] = (existing_prof, bt_status)
-                        matched_profiles.add(existing_prof.name)
-                        matched_profiles.add(final_name)
-                        matched_profiles.add(bt_name)
-                        replaced = True
-                        break
+                    # Upgrade the placeholder or direct hardware with active, verified Bluetooth telemetry!
+                    # Verified Bluetooth GATT percentage from Windows / BlueZ is authoritative.
+                    upgraded_cat = final_cat if final_cat != DeviceCategory.OTHER else existing_prof.category
+                    upgraded_icon = final_icon if final_icon else existing_prof.icon
+                    upgraded_prof = DeviceProfile(
+                        name=existing_prof.name,
+                        category=upgraded_cat,
+                        icon=upgraded_icon,
+                        match=existing_prof.match,
+                        protocol="bluetooth",
+                        config=existing_prof.config,
+                    )
+                    results[idx] = (upgraded_prof, bt_status)
+                    matched_profiles.add(existing_prof.name)
+                    matched_profiles.add(final_name)
+                    matched_profiles.add(bt_name)
+                    replaced = True
+                    break
 
             if not replaced and final_name not in matched_profiles and final_name not in ignored and bt_name not in ignored:
                 results.append((bt_profile, bt_status))
@@ -844,6 +885,20 @@ class BatteryEngine:
             vid_key = f"{prof.match.vendor_id:04x}:{prof.match.product_id or 0:04x}"
             if prof.name in ignored or vid_key in ignored or f"{prof.match.vendor_id:04x}" in ignored:
                 continue
+
+            # Token-based match against ignored entries (e.g. "Pebble_K380s" ignores "Logitech Pebble Keys 2 K380s")
+            p_tokens = set(re.findall(r"[a-z0-9]+", prof.name.lower())) - {"keyboard", "mouse", "headset", "bt", "2", "4g", "pro", "dual", "mode"}
+            is_ign = False
+            for ign_item in ignored:
+                if ":" in ign_item:
+                    continue
+                ign_tokens = set(re.findall(r"[a-z0-9]+", ign_item.lower())) - {"keyboard", "mouse", "headset", "bt", "2", "4g", "pro", "dual", "mode"}
+                if ign_tokens and (ign_tokens == p_tokens or ign_tokens.issubset(p_tokens) or p_tokens.issubset(ign_tokens)):
+                    is_ign = True
+                    break
+            if is_ign:
+                continue
+
             key = f"{prof.name}:{prof.match.vendor_id:04x}:{prof.match.product_id or 0:04x}"
             filtered_stat = self._filter_battery_jitter(key, stat)
             smoothed.append((prof, filtered_stat))

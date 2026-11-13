@@ -775,8 +775,8 @@ class TestAreYouLowBattery(unittest.TestCase):
             # MUST have deduplicated into exactly 1 device card!
             self.assertEqual(len(results), 1)
             p, s = results[0]
-            # MUST retain direct hardware telemetry (15%) rather than stale Windows GATT cache (95%)
-            self.assertEqual(s.percentage, 15)
+            # Verified Bluetooth telemetry (95%) is authoritative over unverified HID responses
+            self.assertEqual(s.percentage, 95)
 
     def test_updater_requires_published_checksum_and_prefers_github_digest(self):
         from areyoulowbattery.updater import extract_expected_sha256, DownloadWorker
@@ -1023,6 +1023,87 @@ class TestAreYouLowBattery(unittest.TestCase):
         with patch("areyoulowbattery.discovery.enumerate_hidraw", return_value=nodes), \
              patch("areyoulowbattery.discovery.get_handler", side_effect=fake_get_handler):
             self.assertEqual(probe_device_protocol(dev), ("razer_v1", 66))
+
+    def test_clean_env_pyinstaller_isolation(self):
+        from areyoulowbattery.clean_env import get_clean_env
+        with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/_MEI12345/lib", "LD_LIBRARY_PATH_ORIG": "/usr/lib64"}):
+            env = get_clean_env()
+            self.assertEqual(env["LD_LIBRARY_PATH"], "/usr/lib64")
+        with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/_MEI12345/lib"}, clear=True):
+            env = get_clean_env()
+            self.assertNotIn("LD_LIBRARY_PATH", env)
+
+    def test_scan_unmapped_devices_includes_ignored_and_bluetooth(self):
+        from areyoulowbattery.discovery import scan_unmapped_devices
+        nodes = [
+            HidrawDevice("/dev/hidraw10", 0x046D, 0xC534, 0, "USB Receiver"),
+        ]
+        mock_bt = [("Pebble Keys 2 K380s", 95, "Windows Registry", None, "input-keyboard")]
+        with patch("areyoulowbattery.discovery.enumerate_hidraw", return_value=nodes), \
+             patch("areyoulowbattery.discovery.is_device_ignored", return_value=True), \
+             patch("areyoulowbattery.engine.BatteryEngine._poll_bluetooth_peripheral_batteries", return_value=mock_bt):
+            # When include_ignored=False, ignored devices are omitted
+            unmapped_clean = scan_unmapped_devices([], include_ignored=False)
+            self.assertEqual(len(unmapped_clean), 0)
+            # When include_ignored=True, both ignored USB and Bluetooth devices are returned to allow restore!
+            unmapped_all = scan_unmapped_devices([], include_ignored=True)
+            names = [d.name for d in unmapped_all]
+            self.assertIn("USB Receiver", names)
+            self.assertIn("Pebble Keys 2 K380s", names)
+
+    def test_is_profile_already_mapped_with_ignored_and_generic_profile(self):
+        from areyoulowbattery.discovery import is_profile_already_mapped
+        generic_prof = DeviceProfile(
+            name="Logitech Lightspeed Peripheral",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x046D, product_id=None),
+            protocol="hidpp_v2",
+        )
+        # Normal unmapped device matches generic profile -> already mapped
+        self.assertTrue(is_profile_already_mapped(0x046D, 0xC534, [generic_prof], ignored=set(), dev_name="USB Receiver"))
+        # When device VID:PID is ignored, it must return False so it appears in Find Devices to restore
+        self.assertFalse(is_profile_already_mapped(0x046D, 0xC534, [generic_prof], ignored={"046d:c534"}, dev_name="USB Receiver"))
+        # When device name is ignored, it must also return False
+        self.assertFalse(is_profile_already_mapped(0x046D, 0xC534, [generic_prof], ignored={"USB Receiver"}, dev_name="USB Receiver"))
+
+    def test_find_profile_binds_concrete_pid_and_ignores_ble_hid(self):
+        from areyoulowbattery.engine import BatteryEngine
+        engine = BatteryEngine()
+        generic_prof = DeviceProfile(
+            name="Logitech Lightspeed Peripheral",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x046D, product_id=None),
+            protocol="hidpp_v2",
+        )
+        engine.profiles = [generic_prof]
+        # 1. Generic match binds dev.product_id
+        dev = HidrawDevice(r"\\?\hid#vid_046d&pid_c534&mi_01#...", 0x046D, 0xC534, 1, "USB Receiver")
+        matched = engine.find_profile_for_device(dev)
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.match.product_id, 0xC534)
+
+        # 2. On Windows, Bluetooth LE endpoint with {00001812 is bypassed for 2.4G HID++
+        ble_dev = HidrawDevice(r"\\?\HID#{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02046d_PID&b377...", 0x046D, 0xB377, -1, "Pebble_K380s")
+        with patch("sys.platform", "win32"):
+            matched_ble = engine.find_profile_for_device(ble_dev)
+            self.assertIsNone(matched_ble)
+
+    def test_hidpp_handler_bypasses_ble_path_on_windows(self):
+        from areyoulowbattery.handlers.hidpp import LogitechHidppHandler
+        handler = LogitechHidppHandler()
+        prof = DeviceProfile(
+            name="Logitech Lightspeed Peripheral",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x046D, product_id=0xB377),
+            protocol="hidpp_v2",
+        )
+        ble_dev = HidrawDevice(r"\\?\HID#{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02046d_PID&b377...", 0x046D, 0xB377, -1, "Pebble_K380s")
+        with patch("sys.platform", "win32"):
+            status = handler.read_battery(ble_dev, prof)
+            self.assertIsNone(status)
 
 
 if __name__ == "__main__":
