@@ -1,26 +1,40 @@
 # AreYouLowBattery - UDev rules for wireless mice, keyboards and headsets
-# Uses MODE="0660", TAG+="uaccess" so systemd-logind grants dynamic ACL access
-# exclusively to the active physical seat user rather than world-writable 0666.
+# Uses ACTION!="remove", SUBSYSTEM=="hidraw", MODE="0660", TAG+="uaccess"
+# so systemd-logind grants dynamic ACL access exclusively to the active physical
+# seat console user rather than global/world-writable permissions (0666).
 
 # Delux / Attack Shark / Xenta / CompX / Beken devices (VID: 0x1d57)
-KERNEL=="hidraw*", ATTRS{idVendor}=="1d57", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1d57", MODE="0660", TAG+="uaccess"
 
 # Areson / CompX 2.4G Dual Mode mice & keyboards (Ajazz, Attack Shark, Pulsar, Lamzu, VXE, Royalaxe) (VID: 0x25a7)
-KERNEL=="hidraw*", ATTRS{idVendor}=="25a7", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="25a7", MODE="0660", TAG+="uaccess"
 
 # Royuan / RongYuan / Royalaxe / Akko / MonsGeek keyboards (VID: 0x3151)
-KERNEL=="hidraw*", ATTRS{idVendor}=="3151", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3151", MODE="0660", TAG+="uaccess"
 
 # Actions Semiconductor Co., Ltd USB Audio & HID dongles (Baseus GH02, etc.) (VID: 0x10d6)
-KERNEL=="hidraw*", ATTRS{idVendor}=="10d6", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="10d6", MODE="0660", TAG+="uaccess"
 
 # SinoWealth generic gaming devices (VID: 0x258a)
-KERNEL=="hidraw*", ATTRS{idVendor}=="258a", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="258a", MODE="0660", TAG+="uaccess"
 
-# Telink / Nordic semiconductor dongles (VID: 0x248a, 0x1915, 0x3554)
-KERNEL=="hidraw*", ATTRS{idVendor}=="248a", MODE="0660", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="1915", MODE="0660", TAG+="uaccess"
-KERNEL=="hidraw*", ATTRS{idVendor}=="3554", MODE="0660", TAG+="uaccess"
+# Telink / Nordic Semiconductor dongles (VXE, ATK, Scyrox, Lamzu 4K) (VID: 0x248a, 0x1915, 0x3554)
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="248a", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1915", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3554", MODE="0660", TAG+="uaccess"
 
 # Logitech Lightspeed / Bolt / Unifying receivers (VID: 0x046d)
-KERNEL=="hidraw*", ATTRS{idVendor}=="046d", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", MODE="0660", TAG+="uaccess"
+
+# Razer HyperSpeed wireless mice, keyboards & dongles (VID: 0x1532)
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", MODE="0660", TAG+="uaccess"
+
+# SteelSeries wireless mice & headsets (VID: 0x1038)
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1038", MODE="0660", TAG+="uaccess"
+
+# Corsair Slipstream wireless mice & headsets (VID: 0x1b1c)
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1b1c", MODE="0660", TAG+="uaccess"
+
+# HyperX wireless mice & headsets (Kingston & HP) (VID: 0x0951, 0x03f0)
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0951", MODE="0660", TAG+="uaccess"
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="03f0", MODE="0660", TAG+="uaccess"
