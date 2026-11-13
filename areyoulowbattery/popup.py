@@ -66,8 +66,17 @@ class RoundedBatteryBar(QWidget):
 class DeviceCard(QFrame):
     """A sleek card widget displaying a single peripheral's battery telemetry."""
 
-    def __init__(self, profile: DeviceProfile, status: BatteryStatus, parent=None):
+    def __init__(
+        self,
+        profile: DeviceProfile,
+        status: BatteryStatus,
+        on_action: Optional[Callable[[str, DeviceProfile], None]] = None,
+        parent=None,
+    ):
         super().__init__(parent)
+        self.profile = profile
+        self.status = status
+        self._on_action = on_action
         self.setObjectName("deviceCard")
         accent = _pick_accent_color(
             status.percentage,
@@ -199,7 +208,75 @@ class DeviceCard(QFrame):
         )
         bot_row.addWidget(proto_lbl)
 
+        self.btn_more = QPushButton("•••")
+        self.btn_more.setObjectName("cardMoreBtn")
+        self.btn_more.setToolTip(f"Options for {profile.name}")
+        self.btn_more.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_more.setStyleSheet("""
+            QPushButton#cardMoreBtn {
+                background-color: transparent;
+                color: #64748b;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 1px 5px;
+                font-size: 10px;
+                font-weight: 700;
+            }
+            QPushButton#cardMoreBtn:hover {
+                background-color: #334155;
+                color: #f8fafc;
+            }
+        """)
+        self.btn_more.clicked.connect(self._show_card_menu)
+        bot_row.addWidget(self.btn_more)
+
         layout.addLayout(bot_row)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_card_menu()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def _show_card_menu(self):
+        if not self._on_action:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #0f172a;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 4px;
+                color: #f8fafc;
+            }
+            QMenu::item {
+                padding: 6px 14px;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QMenu::item:selected {
+                background-color: #0284c7;
+                color: #ffffff;
+            }
+        """)
+        act_proto = menu.addAction("🔁 Change Protocol...")
+        act_rename = menu.addAction("✏️ Rename Device...")
+        act_type = menu.addAction("🏷️ Change Type / Icon...")
+        menu.addSeparator()
+        act_remove = menu.addAction("🗑️ Remove Device...")
+
+        pos = self.btn_more.mapToGlobal(QPoint(0, self.btn_more.height() + 2))
+        selected = menu.exec(pos)
+        if selected == act_proto:
+            self._on_action("change_protocol", self.profile)
+        elif selected == act_rename:
+            self._on_action("rename", self.profile)
+        elif selected == act_type:
+            self._on_action("change_type", self.profile)
+        elif selected == act_remove:
+            self._on_action("remove", self.profile)
 
 
 class BatteryPopup(QWidget):
@@ -211,8 +288,10 @@ class BatteryPopup(QWidget):
     def __init__(
         self,
         on_refresh: Callable[[], None],
-        context_menu: QMenu,
+        settings_menu: Optional[QMenu] = None,
+        context_menu: Optional[QMenu] = None,
         on_open_discovery: Optional[Callable[[], None]] = None,
+        on_device_action: Optional[Callable[[str, DeviceProfile], None]] = None,
     ):
         super().__init__(
             None,
@@ -223,8 +302,10 @@ class BatteryPopup(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self._on_refresh = on_refresh
+        self._settings_menu = settings_menu or context_menu
         self._context_menu = context_menu
         self._on_open_discovery = on_open_discovery
+        self._on_device_action = on_device_action
         self._devices: List[Tuple[DeviceProfile, BatteryStatus]] = []
         self._last_updated_ts: float = 0.0
 
@@ -307,7 +388,7 @@ class BatteryPopup(QWidget):
         self.main_layout.addWidget(self.cards_container)
 
         # Footer
-        self.footer_lbl = QLabel("Click ⚙ for device settings & autostart")
+        self.footer_lbl = QLabel("Click ⚙ for app settings | ••• on cards for device options")
         self.footer_lbl.setStyleSheet("font-size: 10px; color: #64748b; border: none;")
         self.footer_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.main_layout.addWidget(self.footer_lbl)
@@ -317,13 +398,14 @@ class BatteryPopup(QWidget):
         self._on_refresh()
 
     def _open_discovery(self):
-        self.hide()
         if self._on_open_discovery:
             self._on_open_discovery()
 
     def _open_settings_menu(self):
-        btn_pos = self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height() + 4))
-        self._context_menu.popup(btn_pos)
+        target_menu = self._settings_menu or self._context_menu
+        if target_menu:
+            btn_pos = self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height() + 4))
+            target_menu.popup(btn_pos)
 
     def update_devices(self, devices: List[Tuple[DeviceProfile, BatteryStatus]]):
         self._devices = devices
@@ -381,10 +463,28 @@ class BatteryPopup(QWidget):
 
             sorted_devs = sorted(self._devices, key=_sort_key)
             for prof, stat in sorted_devs:
-                self.cards_layout.addWidget(DeviceCard(prof, stat, self.cards_container))
+                self.cards_layout.addWidget(
+                    DeviceCard(prof, stat, on_action=self._on_device_action, parent=self.cards_container)
+                )
 
         self.footer_lbl.setText("Right-click tray icon or click ⚙ for options")
         self.adjustSize()
+
+    def show_centered_or_tray(self):
+        """Immediately shows the flyout positioned neatly in the bottom-right near tray."""
+        self._rebuild_cards()
+        self.adjustSize()
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            w = self.width()
+            h = self.height()
+            x = max(avail.left() + 16, avail.right() - w - 24)
+            y = max(avail.top() + 16, avail.bottom() - h - 48)
+            self.move(x, y)
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def toggle_at_cursor(self):
         if self.isVisible():
@@ -421,8 +521,15 @@ class BatteryPopup(QWidget):
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
-            if not self._context_menu.isVisible():
-                self.hide()
+            from PySide6.QtWidgets import QApplication
+            # Do NOT hide while user interacts with a modal dialog (Rename, Protocol, Discovery, etc.)
+            if QApplication.activeModalWidget() is not None:
+                return
+            if self._settings_menu and self._settings_menu.isVisible():
+                return
+            if self._context_menu and self._context_menu.isVisible():
+                return
+            self.hide()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
