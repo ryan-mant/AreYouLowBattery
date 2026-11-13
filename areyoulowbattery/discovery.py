@@ -12,7 +12,7 @@ from areyoulowbattery.transport import enumerate_hidraw, HidrawDevice
 from areyoulowbattery.handlers import get_handler
 
 
-# Well-known host hardware to ignore during device discovery (motherboard, hubs, webcams, audio)
+# Well-known host hardware to ignore during device discovery (motherboard, hubs, webcams, audio, internal touchpads)
 IGNORED_VENDORS = {
     0x1D6B,  # Linux Foundation Root Hubs
     0x05E3,  # Genesys Logic USB Hub
@@ -21,12 +21,14 @@ IGNORED_VENDORS = {
     0x8087,  # Intel Bluetooth / Hub
     0x0A12,  # Cambridge Silicon Radio Bluetooth Host Adapter
     0x04F2,  # Chicony Webcam
+    0x27C6,  # Goodix (Laptop Touchpads / Fingerprint readers)
 }
 
 IGNORED_PRODUCT_PATTERNS = [
     r"hub\b", r"host controller", r"root hub", r"camera", r"webcam",
     r"microphone", r"audio dac", r"mystic light", r"aura led", r"rgb header",
     r"bt dongle", r"bluetooth adapter", r"bluetooth host",
+    r"hidi2c", r"touchpad", r"trackpad", r"converteddevice",
 ]
 
 
@@ -67,8 +69,11 @@ def get_user_profiles_dir() -> str:
     return d
 
 
-def is_device_ignored(name: str, vid: int) -> bool:
+def is_device_ignored(name: str, vid: int, pid: int = 0) -> bool:
     if vid in IGNORED_VENDORS:
+        return True
+    # Ignore Microsoft virtual / converted devices (PID 0x0000)
+    if vid == 0x045E and pid == 0x0000:
         return True
     lower = name.lower()
     for pat in IGNORED_PRODUCT_PATTERNS:
@@ -77,31 +82,54 @@ def is_device_ignored(name: str, vid: int) -> bool:
     return False
 
 
-def is_profile_already_mapped(vid: int, pid: int, profiles: List[DeviceProfile]) -> bool:
+def is_profile_already_mapped(
+    vid: int, pid: int, profiles: List[DeviceProfile], ignored: Optional[set] = None
+) -> bool:
+    from areyoulowbattery.engine import load_device_overrides
+    overrides = load_device_overrides() if ignored is not None else {}
+    vid_key = f"{vid:04x}:{pid:04x}"
+
+    if ignored is not None:
+        if vid_key in ignored:
+            return False  # Device is currently ignored/hidden, so it should be visible in Find Devices to restore!
+
     for p in profiles:
         m = p.match
         if m.vendor_id == vid:
             if not m.product_ids and m.product_id is None:
-                # VID-only generic profile
-                return True
-            if m.product_id == pid or (m.product_ids and pid in m.product_ids):
+                has_match = True
+            elif m.product_id == pid or (m.product_ids and pid in m.product_ids):
+                has_match = True
+            else:
+                has_match = False
+
+            if has_match:
+                if ignored is not None:
+                    ovr_name = overrides.get(p.name, {}).get("name") or overrides.get(vid_key, {}).get("name")
+                    if p.name in ignored or (ovr_name and ovr_name in ignored):
+                        continue
                 return True
     return False
 
 
-def scan_unmapped_devices(profiles: List[DeviceProfile]) -> List[DiscoveredDevice]:
+def scan_unmapped_devices(
+    profiles: List[DeviceProfile], include_ignored: bool = True
+) -> List[DiscoveredDevice]:
     """
     Scans all connected USB ports and HID nodes for peripherals that do not yet have
-    a matching YAML profile.
+    a matching active YAML profile. If include_ignored is True, devices that were previously
+    hidden/removed are also returned so the user can easily un-hide and restore them.
     """
+    from areyoulowbattery.engine import load_ignored_devices
+    ignored = load_ignored_devices() if include_ignored else None
     candidates: Dict[Tuple[int, int], DiscoveredDevice] = {}
 
     # 1. Scan /dev/hidraw nodes
     hid_nodes = enumerate_hidraw()
     for dev in hid_nodes:
-        if is_device_ignored(dev.name, dev.vendor_id):
+        if is_device_ignored(dev.name, dev.vendor_id, dev.product_id):
             continue
-        if is_profile_already_mapped(dev.vendor_id, dev.product_id, profiles):
+        if is_profile_already_mapped(dev.vendor_id, dev.product_id, profiles, ignored=ignored):
             continue
         key = (dev.vendor_id, dev.product_id)
         if key not in candidates:
@@ -147,9 +175,9 @@ def scan_unmapped_devices(profiles: List[DeviceProfile]) -> List[DiscoveredDevic
                     except Exception:
                         pass
 
-            if is_device_ignored(name, vid):
+            if is_device_ignored(name, vid, pid):
                 continue
-            if is_profile_already_mapped(vid, pid, profiles):
+            if is_profile_already_mapped(vid, pid, profiles, ignored=ignored):
                 continue
 
             key = (vid, pid)
@@ -187,121 +215,117 @@ def scan_unmapped_devices(profiles: List[DeviceProfile]) -> List[DiscoveredDevic
     return list(candidates.values())
 
 
-def probe_device_protocol(dev: DiscoveredDevice) -> Optional[Tuple[str, int]]:
-    """
-    Attempts to read live battery percentage from an unmapped device using standard 2.4G protocols.
-    Returns (protocol_name, battery_percentage) on success, or None if probe failed.
-    """
-    target_path = dev.dev_path
-    if not target_path:
-        # Check if a hidraw node exists now
-        matching = [h for h in enumerate_hidraw() if h.vendor_id == dev.vendor_id and h.product_id == dev.product_id]
-        if matching:
-            target_path = matching[0].dev_path
+# Map known vendor IDs strictly to their legitimate protocols to prevent foreign packet bombardment
+VENDOR_PROTOCOL_MAP = {
+    0x046D: ["hidpp_v2", "hidpp_v1"],            # Logitech Lightspeed / Unifying / Nano
+    0x1532: ["razer_v1"],                         # Razer HyperSpeed
+    0x1038: ["steelseries_v1"],                   # SteelSeries Quantum Wireless
+    0x1B1C: ["corsair_v1"],                       # Corsair Slipstream
+    0x0951: ["hyperx_v1"],                        # HyperX (Kingston)
+    0x03F0: ["hyperx_v1"],                        # HyperX (HP)
+    0x10D6: ["actions_v1"],                       # Actions Semi (Baseus GH02)
+    0x25A7: ["compx_v1"],                         # CompX / Areson (Ajazz, Pulsar, etc.)
+    0x1D57: ["compx_v1"],                         # CompX / Delux
+    0x3554: ["nordic_v1"],                        # Nordic Semiconductor RF (VXE, ATK, Scyrox)
+    0x1915: ["nordic_v1"],                        # Nordic Semiconductor
+}
 
-    if not target_path:
+
+@dataclass
+class ProbeResult:
+    protocol: str
+    percentage: int
+    hid_dev: HidrawDevice
+    profile: DeviceProfile
+
+
+def _is_live_reading(st) -> bool:
+    """A usable probe answer: connected, has a real percentage and is NOT a cached value."""
+    return bool(
+        st
+        and st.is_connected
+        and st.percentage is not None
+        and st.percentage > 0
+        and not str(st.details or "").lower().startswith("cached")
+    )
+
+
+def probe_device_protocol_live(dev: DiscoveredDevice) -> Optional[ProbeResult]:
+    """
+    Safely probes an unmapped peripheral using protocols appropriate for its vendor ID.
+    Guarantees cross-manufacturer packet isolation (e.g. never sends Razer commands to a Logitech device).
+    Only LIVE answers count: values served from the handlers' cache (device asleep) are rejected,
+    so a profile is never created without confirmed live communication.
+    """
+    # All HID nodes of this exact device (a dongle exposes several interfaces; only one carries
+    # the vendor telemetry channel). The node found at scan time is tried first.
+    node_paths = []
+    if dev.dev_path:
+        node_paths.append((dev.dev_path, dev.interface_number))
+    for h in enumerate_hidraw():
+        if h.vendor_id == dev.vendor_id and h.product_id == dev.product_id:
+            if all(h.dev_path != p for p, _ in node_paths):
+                node_paths.append((h.dev_path, h.interface_number))
+
+    if not node_paths:
         return None
 
-    hid_dev = HidrawDevice(
-        dev_path=target_path,
-        vendor_id=dev.vendor_id,
-        product_id=dev.product_id,
-        interface_number=dev.interface_number or 0,
-        name=dev.name,
-    )
+    # Strictly restrict protocol probes to vendor-appropriate candidates
+    # Unknown vendors only get the passive, read-only standard HID handler.
+    # Vendor-specific (write) protocols are never guessed for unidentified hardware;
+    # users can pick one manually via "Change protocol...".
+    candidate_protocols = VENDOR_PROTOCOL_MAP.get(dev.vendor_id, ["generic_hid"])
 
-    dummy_profile = DeviceProfile(
-        name=dev.name,
-        category=dev.suggested_category,
-        icon=dev.suggested_icon,
-        match=DeviceMatch(
+    for target_path, iface in node_paths:
+        hid_dev = HidrawDevice(
+            dev_path=target_path,
             vendor_id=dev.vendor_id,
             product_id=dev.product_id,
-            interface_number=dev.interface_number,
-        ),
-        protocol="compx_v1",
-    )
-
-    # 1. Try CompX 1K / 4K
-    try:
-        handler = get_handler("compx_v1")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("compx_v1", st.percentage)
-    except Exception:
-        pass
-
-    # 2. Try Nordic 4K/8K RF
-    try:
-        dummy_profile.protocol = "nordic_v1"
-        handler = get_handler("nordic_v1")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("nordic_v1", st.percentage)
-    except Exception:
-        pass
-
-    # 3. Try Logitech HID++ 2.0
-    try:
-        dummy_profile.protocol = "hidpp_v2"
-        handler = get_handler("hidpp_v2")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("hidpp_v2", st.percentage)
-    except Exception:
-        pass
-
-    # 4. Try Razer HyperSpeed
-    try:
-        dummy_profile.protocol = "razer_v1"
-        handler = get_handler("razer_v1")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("razer_v1", st.percentage)
-    except Exception:
-        pass
-
-    # 5. Try SteelSeries
-    try:
-        dummy_profile.protocol = "steelseries_v1"
-        handler = get_handler("steelseries_v1")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("steelseries_v1", st.percentage)
-    except Exception:
-        pass
-
-    # 6. Try Corsair Slipstream
-    try:
-        dummy_profile.protocol = "corsair_v1"
-        handler = get_handler("corsair_v1")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("corsair_v1", st.percentage)
-    except Exception:
-        pass
-
-    # 7. Try HyperX Wireless
-    try:
-        dummy_profile.protocol = "hyperx_v1"
-        handler = get_handler("hyperx_v1")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("hyperx_v1", st.percentage)
-    except Exception:
-        pass
-
-    # 8. Try Generic HID Battery
-    try:
-        dummy_profile.protocol = "generic_hid"
-        handler = get_handler("generic_hid")
-        st = handler.read_battery(hid_dev, dummy_profile)
-        if st and st.is_connected and st.percentage is not None and st.percentage > 0:
-            return ("generic_hid", st.percentage)
-    except Exception:
-        pass
+            interface_number=iface or 0,
+            name=dev.name,
+        )
+        dummy_profile = DeviceProfile(
+            name=dev.name,
+            category=dev.suggested_category,
+            icon=dev.suggested_icon,
+            match=DeviceMatch(
+                vendor_id=dev.vendor_id,
+                product_id=dev.product_id,
+                interface_number=iface,
+            ),
+            protocol="generic_hid",
+        )
+        for proto in candidate_protocols:
+            try:
+                dummy_profile.protocol = proto
+                handler = get_handler(proto)
+                st = handler.read_battery(hid_dev, dummy_profile)
+                if _is_live_reading(st):
+                    return ProbeResult(proto, st.percentage, hid_dev, dummy_profile)
+            except Exception:
+                continue
 
     return None
+
+
+def confirm_probe(result: ProbeResult) -> Optional[int]:
+    """
+    Re-reads the battery ONCE using the exact protocol and HID node that already answered
+    (no re-probing of other nodes/protocols). Returns the live percentage or None.
+    """
+    try:
+        st = get_handler(result.protocol).read_battery(result.hid_dev, result.profile)
+        if _is_live_reading(st):
+            return st.percentage
+    except Exception:
+        pass
+    return None
+
+
+def probe_device_protocol(dev: DiscoveredDevice) -> Optional[Tuple[str, int]]:
+    """Returns (protocol_name, battery_percentage) on a live answer, or None if probe failed."""
+    res = probe_device_protocol_live(dev)
+    return (res.protocol, res.percentage) if res else None
 
 
 def save_custom_profile(
