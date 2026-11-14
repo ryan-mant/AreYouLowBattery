@@ -16,6 +16,7 @@ from areyoulowbattery.engine import (
 )
 from areyoulowbattery.profile_loader import load_all_profiles
 from areyoulowbattery.models import DeviceProfile, BatteryStatus
+from areyoulowbattery.clean_env import get_clean_env
 
 CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
 CACHE_FILE = os.path.join(CACHE_DIR, "areyoulowbattery_status.json")
@@ -252,7 +253,7 @@ def run_tray(auto_show: bool = False):
             try:
                 res = subprocess.run(
                     ["systemctl", "--user", "is-enabled", "areyoulowbattery.service"],
-                    capture_output=True, text=True, timeout=1.5
+                    capture_output=True, text=True, timeout=1.5, env=get_clean_env()
                 )
                 return res.stdout.strip() == "enabled"
             except Exception:
@@ -284,12 +285,12 @@ def run_tray(auto_show: bool = False):
         else:
             if checked:
                 try:
-                    subprocess.run(["systemctl", "--user", "enable", "areyoulowbattery.service"], check=True, timeout=5)
+                    subprocess.run(["systemctl", "--user", "enable", "areyoulowbattery.service"], check=True, timeout=5, env=get_clean_env())
                 except Exception as e:
                     print(f"Failed to enable autostart: {e}", file=sys.stderr)
             else:
                 try:
-                    subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=True, timeout=5)
+                    subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=True, timeout=5, env=get_clean_env())
                 except Exception as e:
                     print(f"Failed to disable autostart: {e}", file=sys.stderr)
         autostart_action.blockSignals(True)
@@ -513,6 +514,8 @@ def run_tray(auto_show: bool = False):
                 getattr(prof.match, "product_ids", None),
             )
             engine.profiles = load_all_profiles()
+            engine._offline_devices.pop(prof.name, None)
+            engine._recent_queries.pop(prof.name, None)
             wake_event.set()
 
     rename_action.triggered.connect(lambda: prompt_rename())
@@ -551,15 +554,16 @@ def run_tray(auto_show: bool = False):
                 app.quit()
                 return
 
-            subprocess.run(["systemctl", "--user", "stop", "areyoulowbattery.service"], check=False)
-            subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=False)
+            clean_env = get_clean_env()
+            subprocess.run(["systemctl", "--user", "stop", "areyoulowbattery.service"], check=False, env=clean_env)
+            subprocess.run(["systemctl", "--user", "disable", "areyoulowbattery.service"], check=False, env=clean_env)
             service_path = os.path.expanduser("~/.config/systemd/user/areyoulowbattery.service")
             if os.path.exists(service_path):
                 try:
                     os.remove(service_path)
                 except OSError:
                     pass
-            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False, env=clean_env)
             target_bin = os.path.expanduser("~/.local/bin/areyoulowbattery")
             if os.path.exists(target_bin):
                 try:
@@ -701,6 +705,7 @@ def run_tray(auto_show: bool = False):
                 "/usr/share/sounds/freedesktop/stereo/dialog-warning.oga",
                 "/usr/share/sounds/freedesktop/stereo/bell.oga",
             ]
+            clean_env = get_clean_env()
             for snd in fallback_files:
                 if os.path.exists(snd):
                     for player in ("pw-play", "paplay"):
@@ -709,6 +714,7 @@ def run_tray(auto_show: bool = False):
                                 [player, snd],
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL,
+                                env=clean_env,
                             )
                             return
                         except Exception:
@@ -718,6 +724,7 @@ def run_tray(auto_show: bool = False):
                     ["canberra-gtk-play", "-i", sound_id],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    env=clean_env,
                 )
             except Exception:
                 pass
@@ -820,6 +827,7 @@ def run_tray(auto_show: bool = False):
                     stderr=subprocess.DEVNULL,
                     text=True,
                     bufsize=1,
+                    env=get_clean_env(),
                 )
                 for line in proc.stdout:
                     if stop_event.is_set():
@@ -882,6 +890,10 @@ def run_tray(auto_show: bool = False):
         popup.update_devices(supported)
 
         if not supported:
+            if not menu.isVisible():
+                for act in dynamic_actions:
+                    menu.removeAction(act)
+                dynamic_actions.clear()
             tray.setIcon(_render_tray_icon(None, False, False))
             tray.setToolTip("AreYouLowBattery: No supported device active")
             status_action.setVisible(True)

@@ -227,8 +227,10 @@ class LogitechHidppHandler(BaseProtocolHandler):
         if sysfs_status is not None:
             return sysfs_status
 
-        if sys.platform == "win32" and dev.usage_page is not None and dev.usage_page < 0xFF00:
-            return None
+        if sys.platform == "win32":
+            lower_path = (dev.dev_path or "").lower()
+            if "bth" in lower_path or "{00001124" in lower_path or "{00001812" in lower_path:
+                return None
 
         cached = self._read_cache(profile, dev)
         candidates = [dev]
@@ -240,10 +242,13 @@ class LogitechHidppHandler(BaseProtocolHandler):
                     d.vendor_id == dev.vendor_id
                     and d.product_id == dev.product_id
                     and d.dev_path != dev.dev_path
-                    and (d.usage_page is None or d.usage_page >= 0xFF00)
+                    and "bth" not in (d.dev_path or "").lower()
+                    and "{00001124" not in (d.dev_path or "").lower()
+                    and "{00001812" not in (d.dev_path or "").lower()
                 )
             ]
             candidates.extend(siblings)
+            candidates.sort(key=lambda x: (x.usage_page or 0) >= 0xFF00, reverse=True)
 
         is_receiver = "receiver" in (dev.name or "").lower()
 

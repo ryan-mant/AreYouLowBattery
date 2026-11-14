@@ -3,10 +3,17 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QApplication, QMenu
 )
-from PySide6.QtCore import Qt, QPoint, QEvent, QRectF
+from PySide6.QtCore import Qt, QPoint, QEvent, QRectF, QSize
 from PySide6.QtGui import QCursor, QGuiApplication, QPainter, QColor, QPainterPath
 
 from areyoulowbattery.models import DeviceProfile, BatteryStatus
+from areyoulowbattery.vector_icons import (
+    render_category_pixmap,
+    render_search_icon,
+    render_refresh_icon,
+    render_gear_icon,
+    render_close_icon,
+)
 
 
 def _pick_accent_color(
@@ -107,7 +114,12 @@ class DeviceCard(QFrame):
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
-        name_lbl = QLabel(f"{profile.icon}  {profile.name}")
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(render_category_pixmap(profile.category, size=20, color="#38bdf8"))
+        icon_lbl.setFixedSize(20, 20)
+        top_row.addWidget(icon_lbl)
+
+        name_lbl = QLabel(profile.name)
         name_lbl.setStyleSheet("font-size: 13px; font-weight: 600; color: #f1f5f9;")
         top_row.addWidget(name_lbl, 1)
 
@@ -350,29 +362,37 @@ class BatteryPopup(QWidget):
         title.setStyleSheet("font-size: 13px; font-weight: 700; color: #f8fafc; border: none;")
         header.addWidget(title, 1)
 
-        self.find_btn = QPushButton("🔍")
+        self.find_btn = QPushButton()
         self.find_btn.setObjectName("iconBtn")
+        self.find_btn.setIcon(render_search_icon(16))
+        self.find_btn.setIconSize(QSize(16, 16))
         self.find_btn.setToolTip("Find & configure new devices")
         self.find_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.find_btn.clicked.connect(self._open_discovery)
         header.addWidget(self.find_btn)
 
-        self.refresh_btn = QPushButton("↻")
+        self.refresh_btn = QPushButton()
         self.refresh_btn.setObjectName("iconBtn")
+        self.refresh_btn.setIcon(render_refresh_icon(16))
+        self.refresh_btn.setIconSize(QSize(16, 16))
         self.refresh_btn.setToolTip("Refresh battery now")
         self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_btn.clicked.connect(self._handle_refresh)
         header.addWidget(self.refresh_btn)
 
-        self.menu_btn = QPushButton("⚙")
+        self.menu_btn = QPushButton()
         self.menu_btn.setObjectName("iconBtn")
+        self.menu_btn.setIcon(render_gear_icon(16))
+        self.menu_btn.setIconSize(QSize(16, 16))
         self.menu_btn.setToolTip("Options & Settings")
         self.menu_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.menu_btn.clicked.connect(self._open_settings_menu)
         header.addWidget(self.menu_btn)
 
-        self.close_btn = QPushButton("✕")
+        self.close_btn = QPushButton()
         self.close_btn.setObjectName("iconBtn")
+        self.close_btn.setIcon(render_close_icon(16))
+        self.close_btn.setIconSize(QSize(16, 16))
         self.close_btn.setToolTip("Close")
         self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_btn.clicked.connect(self.hide)
@@ -411,6 +431,8 @@ class BatteryPopup(QWidget):
         self._devices = devices
         # Zero background overhead: only rebuild widgets if the popup is currently open!
         if self.isVisible():
+            if QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None:
+                return
             self._rebuild_cards()
 
     def _rebuild_cards(self):
@@ -435,8 +457,10 @@ class BatteryPopup(QWidget):
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             eb_layout.addWidget(empty_lbl)
 
-            find_btn = QPushButton("🔍 Find New Devices")
+            find_btn = QPushButton(" Find New Devices")
             find_btn.setObjectName("iconBtn")
+            find_btn.setIcon(render_search_icon(14, color="#ffffff"))
+            find_btn.setIconSize(QSize(14, 14))
             find_btn.setStyleSheet("""
                 background-color: #0284c7;
                 color: #ffffff;
@@ -537,7 +561,10 @@ class BatteryPopup(QWidget):
             wh = self.windowHandle()
             if wh is not None:
                 try:
-                    wh.startSystemMove()
+                    if wh.startSystemMove():
+                        self._drag_offset = None
+                        event.accept()
+                        return
                 except Exception:
                     pass
             event.accept()

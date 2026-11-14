@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 
 from areyoulowbattery.models import DeviceCategory, CATEGORY_ICONS, DeviceProfile
+from areyoulowbattery.vector_icons import render_category_pixmap
 from areyoulowbattery.discovery import (
     DiscoveredDevice, scan_unmapped_devices, probe_device_protocol, save_custom_profile
 )
@@ -90,7 +91,12 @@ class DeviceConfigCard(QFrame):
         elif clean_name.lower() in ("idle", "unknown", ""):
             clean_name = f"Wireless Peripheral (0x{dev.vendor_id:04x}:0x{dev.product_id:04x})"
 
-        title_lbl = QLabel(f"{dev.suggested_icon}  {clean_name}")
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(render_category_pixmap(dev.suggested_category, size=18, color="#38bdf8"))
+        icon_lbl.setFixedSize(18, 18)
+        header.addWidget(icon_lbl)
+
+        title_lbl = QLabel(clean_name)
         title_lbl.setStyleSheet("font-size: 13px; font-weight: 700; color: #f8fafc;")
         title_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         header.addWidget(title_lbl, 1)
@@ -138,6 +144,9 @@ class DeviceConfigCard(QFrame):
             if cat_enum == dev.suggested_category:
                 default_cat_idx = idx
         self.cmb_cat.setCurrentIndex(default_cat_idx)
+        self.cmb_cat.currentIndexChanged.connect(
+            lambda: icon_lbl.setPixmap(render_category_pixmap(self.cmb_cat.currentData()[0], size=18, color="#38bdf8"))
+        )
         cat_row.addWidget(lbl_cat)
         cat_row.addWidget(self.cmb_cat, 1)
         form_layout.addLayout(cat_row)

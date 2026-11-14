@@ -33,9 +33,9 @@ jobs:
       - name: Install build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y libegl1 libgl1
+          sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libdbus-1-dev libglib2.0-dev
           python -m pip install --upgrade pip
-          pip install pyyaml pyinstaller pyside6-essentials
+          pip install pyyaml pyinstaller pyside6-essentials dbus-python
 
       - name: Install build dependencies (Windows)
         if: runner.os == 'Windows'
@@ -55,6 +55,7 @@ jobs:
             --add-data "profiles:profiles" \
             --add-data "rules:rules" \
             --add-data "assets:assets" \
+            --hidden-import dbus \
             cli.py
           chmod +x dist/areyoulowbattery
           ./dist/areyoulowbattery --help
