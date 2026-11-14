@@ -62,10 +62,13 @@ def get_user_profiles_dir() -> str:
     config_base = (
         os.environ.get("LOCALAPPDATA")
         if sys.platform == "win32"
-        else os.path.expanduser("~/.config")
+        else os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     ) or os.path.expanduser("~/.config")
     d = os.path.join(config_base, "areyoulowbattery", "profiles")
-    os.makedirs(d, exist_ok=True)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
     return d
 
 

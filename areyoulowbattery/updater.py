@@ -57,18 +57,42 @@ def is_newer_version(candidate: str, current: str = __version__) -> bool:
     return parse_version(candidate) > parse_version(current)
 
 
+LINUX_CA_BUNDLE_PATHS = [
+    "/etc/ssl/certs/ca-certificates.crt",                  # Debian, Ubuntu, Arch, Gentoo
+    "/etc/pki/tls/certs/ca-bundle.crt",                    # Fedora, RHEL, CentOS, Nobara
+    "/etc/ssl/ca-bundle.pem",                              # openSUSE, SUSE
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",    # Modern RHEL/Fedora/Nobara
+    "/etc/ssl/cert.pem",                                   # Alpine, FreeBSD, macOS, OpenBSD
+    "/var/lib/ca-certificates/ca-bundle.pem",              # Clear Linux
+]
+
+
 def _create_ssl_context() -> ssl.SSLContext:
     """
     Creates a secure SSLContext using system trust stores and certifi if available.
-    Loads system Root certificates on Windows via ssl.enum_certificates("ROOT") and "CA".
+    Loads system Root certificates on Windows via ssl.enum_certificates("ROOT") and "CA",
+    and iterates known Linux CA bundles for cross-distribution PyInstaller binaries.
     Strictly enforces valid certificate verification (never disables TLS).
     """
     ctx = ssl.create_default_context()
+    loaded = False
     try:
         import certifi
-        ctx.load_verify_locations(certifi.where())
+        ca_file = certifi.where()
+        if os.path.exists(ca_file):
+            ctx.load_verify_locations(ca_file)
+            loaded = True
     except Exception:
         pass
+
+    if not loaded and sys.platform != "win32":
+        for ca_path in LINUX_CA_BUNDLE_PATHS:
+            if os.path.exists(ca_path):
+                try:
+                    ctx.load_verify_locations(ca_path)
+                    break
+                except Exception:
+                    pass
 
     if sys.platform == "win32" and hasattr(ssl, "enum_certificates"):
         for store_name in ("ROOT", "CA"):
