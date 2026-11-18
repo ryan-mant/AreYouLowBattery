@@ -20,8 +20,18 @@ TARGET_RULES_PATH = "/etc/udev/rules.d/99-areyoulowbattery.rules"
 FALLBACK_SYSTEM_RULES_PATH = "/usr/lib/udev/rules.d/99-areyoulowbattery.rules"
 
 
+def _active_rule_lines(text: str) -> set:
+    """Returns the normalized, non-comment rule lines of a udev rules file."""
+    lines = set()
+    for raw in text.splitlines():
+        line = " ".join(raw.split())
+        if line and not line.startswith("#"):
+            lines.add(line)
+    return lines
+
+
 def are_udev_rules_installed() -> bool:
-    """Returns True if the hardened udev rules are installed and up to date on Linux."""
+    """Returns True if the installed udev rules contain every rule of the bundled file (Linux only)."""
     if not sys.platform.startswith("linux"):
         return True
 
@@ -37,9 +47,20 @@ def are_udev_rules_installed() -> bool:
     try:
         with open(installed_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
-            # Verify security hardening: must include peripheral vendor IDs
-            if "1d57" in content and "25a7" in content and "046d" in content:
-                return True
+
+        bundled_path = get_rules_source_path()
+        if not bundled_path:
+            # Bundled rules not found: fall back to the minimal hardening check.
+            return "1d57" in content and "25a7" in content and "046d" in content
+
+        with open(bundled_path, "r", encoding="utf-8", errors="ignore") as f:
+            required = _active_rule_lines(f.read())
+
+        missing = required - _active_rule_lines(content)
+        if missing:
+            logger.debug("Installed udev rules at %s are outdated (%d rule(s) missing)", installed_path, len(missing))
+            return False
+        return True
     except Exception as e:
         logger.debug("Failed to read udev rules at %s: %s", installed_path, e)
 

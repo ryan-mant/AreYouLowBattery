@@ -1,5 +1,7 @@
 import os
+import re
 import json
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock, mock_open
 
@@ -1276,16 +1278,41 @@ class TestAreYouLowBattery(unittest.TestCase):
         self.assertIsNotNone(src_path)
         self.assertTrue(os.path.exists(src_path))
 
-        # 3. Test check with mocked file content
-        valid_rules = '1d57 25a7 046d'
-        with patch("sys.platform", "linux"):
-            with patch("os.path.exists", return_value=True):
-                with patch("builtins.open", mock_open(read_data=valid_rules)):
-                    self.assertTrue(are_udev_rules_installed())
+        # 3. Rules are compared against the bundled file, not a fixed list of vendor IDs
+        with open(src_path, "r", encoding="utf-8") as f:
+            bundled_rules = f.read()
+        bundled_vids = set(re.findall(r'ATTRS\{idVendor\}=="([0-9a-f]{4})"', bundled_rules))
+        self.assertTrue({"a8a5", "3537"} <= bundled_vids)
 
-                # Outdated or corrupted rules return False
-                with patch("builtins.open", mock_open(read_data="old rules without hardening")):
-                    self.assertFalse(are_udev_rules_installed())
+        with tempfile.TemporaryDirectory() as tmp:
+            installed = os.path.join(tmp, "99-areyoulowbattery.rules")
+
+            def check(content):
+                with open(installed, "w", encoding="utf-8") as f:
+                    f.write(content)
+                with patch("sys.platform", "linux"):
+                    with patch("areyoulowbattery.udev_installer.TARGET_RULES_PATH", installed):
+                        return are_udev_rules_installed()
+
+            # An exact copy of the bundled rules is up to date
+            self.assertTrue(check(bundled_rules))
+
+            # Comments, blank lines, indentation and rule order do not matter
+            rule_lines = [l for l in bundled_rules.splitlines() if l.strip() and not l.startswith("#")]
+            reordered = "# local note\n\n" + "\n".join("  " + l for l in reversed(rule_lines)) + "\n"
+            self.assertTrue(check(reordered))
+
+            # Rules from an older release that only know the three legacy VIDs are outdated
+            legacy = [l for l in rule_lines if any(f'"{vid}"' in l for vid in ("1d57", "25a7", "046d"))]
+            self.assertEqual(len(legacy), 3)
+            self.assertFalse(check("\n".join(legacy) + "\n"))
+
+            # Dropping any single newer VID makes the installed rules outdated
+            for vid in ("a8a5", "3537"):
+                self.assertFalse(check("\n".join(l for l in rule_lines if f'"{vid}"' not in l) + "\n"), vid)
+
+            # Unrelated content is outdated
+            self.assertFalse(check("old rules without hardening"))
 
         # 4. Successful installation via pkexec (passing args directly without sh -c)
         mock_proc_ok = MagicMock()
