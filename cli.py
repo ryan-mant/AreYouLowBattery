@@ -20,8 +20,15 @@ from areyoulowbattery.models import DeviceProfile, BatteryStatus, DeviceCategory
 from areyoulowbattery.clean_env import get_clean_env
 from areyoulowbattery.gamemode import is_game_active
 
-CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
-CACHE_FILE = os.path.join(CACHE_DIR, "areyoulowbattery_status.json")
+def _get_cache_dir() -> str:
+    xdg_rt = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_rt and os.path.isdir(xdg_rt):
+        return xdg_rt
+    return "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
+
+
+CACHE_DIR = _get_cache_dir()
+CACHE_FILE = os.path.join(CACHE_DIR, f"areyoulowbattery_status_{os.getuid() if hasattr(os, 'getuid') else 'user'}.json")
 
 def format_text_output(results: List[Tuple[DeviceProfile, BatteryStatus]], show_all: bool = False) -> str:
     if not results:
@@ -176,7 +183,6 @@ def run_daemon_loop(poll_interval: float = 10.0):
 
     print("Starting AreYouLowBattery daemon (caching to /dev/shm)...", flush=True)
     engine = BatteryEngine()
-    tmp_file = CACHE_FILE + ".tmp"
     last_sig = get_hid_topology_signature()
     topology_changed = False
 
@@ -202,9 +208,18 @@ def run_daemon_loop(poll_interval: float = 10.0):
                     "details": status.details,
                     "timestamp": time.time()
                 })
-            with open(tmp_file, "w") as f:
-                json.dump(cached_data, f)
-            os.replace(tmp_file, CACHE_FILE)
+            cache_dir = os.path.dirname(CACHE_FILE) or CACHE_DIR
+            fd, tmp_file = tempfile.mkstemp(prefix=".areyoulowbattery_", suffix=".tmp", dir=cache_dir)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(cached_data, f)
+                os.replace(tmp_file, CACHE_FILE)
+            except Exception:
+                try:
+                    os.remove(tmp_file)
+                except OSError:
+                    pass
+                raise
         except Exception as e:
             print(f"Daemon error: {e}", file=sys.stderr, flush=True)
 
@@ -344,10 +359,10 @@ def cmd_install():
                 shutil.copy2(src_bin, target_bin)
                 os.chmod(target_bin, 0o755)
             print(f"[2/3] Binary installed to {target_bin}")
-        exec_start = f"{target_bin} --tray"
+        exec_start = f'"{target_bin}" --tray'
     else:
         script_path = os.path.abspath(__file__)
-        exec_start = f"{sys.executable} {script_path} --tray"
+        exec_start = f'"{sys.executable}" "{script_path}" --tray'
         print(f"[2/3] Configuring service from {script_path}")
 
     systemd_dir = os.path.expanduser("~/.config/systemd/user")

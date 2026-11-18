@@ -69,19 +69,23 @@ def _read_settings() -> dict:
 
 
 def _write_settings(settings: dict) -> None:
+    import tempfile
+
     path = get_settings_path()
-    tmp_path = path + ".tmp"
+    tmp_path = None
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        fd, tmp_path = tempfile.mkstemp(prefix=".settings_", suffix=".tmp", dir=os.path.dirname(path) or ".")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
         os.replace(tmp_path, path)
+        tmp_path = None
     except OSError:
         # Never let a read-only config dir break the UI.
-        try:
-            if os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
+            try:
                 os.remove(tmp_path)
-        except OSError:
-            pass
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
