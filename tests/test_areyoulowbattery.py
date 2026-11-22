@@ -199,6 +199,43 @@ class TestAreYouLowBattery(unittest.TestCase):
             if os.path.exists(cache_file):
                 os.remove(cache_file)
 
+    def test_nordic_8k_output_report_fallback(self):
+        """Devices like ATK A9 Air (0x373b) ignore Feature Report 0x08 without error and reply only to Output Report."""
+        handler = NordicHandler()
+        prof = DeviceProfile(
+            name="UnitTest ATK A9 Air",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x373B, interface_number=1),
+            protocol="nordic_v1",
+        )
+        dev = HidrawDevice("/dev/hidraw96", 0x373B, 0x11D9, 1, "Wireless mouse 8k dongle-L")
+        cache_file = handler._cache_path(prof, dev)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+
+        pkt = bytes.fromhex("080400000002640010fd000000000000d6")
+
+        class OutputOnlyTransport(FakeTransport):
+            def read_input_report(self, length: int = 64, timeout_sec: float = 0.1):
+                if self.sent_outputs and self.responses:
+                    return self.responses.pop(0)
+                return None
+
+        transport = OutputOnlyTransport([pkt])
+        try:
+            with patch.object(handler, "_has_vendor_descriptor", return_value=True), \
+                 patch("areyoulowbattery.handlers.nordic.HidrawTransport", return_value=transport):
+                st = handler.read_battery(dev, prof)
+                self.assertTrue(st.is_connected)
+                self.assertEqual(st.percentage, 100)
+                self.assertFalse(st.is_charging)
+                self.assertEqual(len(transport.sent_features), 1)
+                self.assertEqual(len(transport.sent_outputs), 1)
+        finally:
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+
     def test_logitech_hidpp_handler(self):
         handler = LogitechHidppHandler()
         prof = DeviceProfile(
@@ -765,6 +802,31 @@ class TestAreYouLowBattery(unittest.TestCase):
                 restore_device("Unwanted Peripheral", 0x9999, 0x8888)
                 self.assertNotIn("Unwanted Peripheral", load_ignored_devices())
                 self.assertNotIn("9999:8888", load_ignored_devices())
+        finally:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_restore_device_clears_name_override_ignored(self):
+        """restore_device must un-ignore custom renamed names from device_overrides.json."""
+        import tempfile
+        from areyoulowbattery.engine import (
+            load_ignored_devices,
+            remove_device,
+            restore_device,
+            save_device_override,
+        )
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch("areyoulowbattery.engine._get_config_dir", return_value=tmp_dir), \
+                 patch("areyoulowbattery.discovery.get_user_profiles_dir", return_value=os.path.join(tmp_dir, "profiles")):
+                save_device_override("Compx Wireless mouse 8k dongle-L", name="ATK A9Air")
+                remove_device("ATK A9Air", 0x373B, 0x11D9)
+                self.assertIn("ATK A9Air", load_ignored_devices())
+
+                restore_device("Compx Wireless mouse 8k dongle-L", 0x373B, 0x11D9)
+                self.assertNotIn("ATK A9Air", load_ignored_devices())
+                self.assertNotIn("373b:11d9", load_ignored_devices())
         finally:
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -42,6 +42,7 @@ Most wireless gaming peripherals (especially popular enthusiast brands like Delu
 | Brand / Device | USB IDs (`VID:PID`) | Protocol / Chipset | Status | Features |
 | :--- | :--- | :--- | :--- | :--- |
 | **CompX 1K / 8K Mice (Delux M900 Pro, Ajazz AJ199/AJ139/AJ159, Attack Shark)** | `1d57:*` / `25a7:fa7b` / `25a7:fa7c` | CompX (`compx_v1`) | ✅ Verified | Live %, Magnetic Dock / USB-C charging (`⚡`), ETA to 100% |
+| **ATK A9 Air / Compx 8K Wireless Mice** | `373b:11d9` / `373b:120a` | Nordic / Compx 8K (`nordic_v1`) | ✅ Verified | Live % over 8K dongle via Output Report `0x08` + hardened `udev` rules |
 | **Smailwolf RS7 / EWEADN G5 / MCHOSE G7** | `a8a5:2255` / `a8a4:2255` | YJX-CHIP (`yjx_v1`) | ✅ Verified | Live battery %, USB cable & RF charging status, sleep cache (by [@EdevandoAlves](https://github.com/EdevandoAlves)) |
 | **GameSir Cyclone 2 (XInput Dongle)** | `3537:100b` | GameSir (`gamesir_v1`) | ✅ Verified | Live battery % and charging telemetry over 2.4G dongle (by [@EdevandoAlves](https://github.com/EdevandoAlves)) |
 | **Royalaxe R68** | `25a7:2420` / Bluetooth | CompX / BLE Dual-Mode | ✅ Verified | Unifies 2.4G dongle with Bluetooth battery telemetry |

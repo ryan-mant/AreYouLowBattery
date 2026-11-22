@@ -310,6 +310,7 @@ VENDOR_PROTOCOL_MAP = {
     0x25A7: ["compx_v1"],                         # CompX / Areson (Ajazz, Pulsar, etc.)
     0x1D57: ["compx_v1"],                         # CompX / Delux
     0x3554: ["nordic_v1"],                        # Nordic Semiconductor RF (VXE, ATK, Scyrox)
+    0x373B: ["nordic_v1"],                        # Compx / ATK 8K wireless (ATK A9 Air, etc.)
     0x1915: ["nordic_v1"],                        # Nordic Semiconductor
     0xA8A5: ["yjx_v1"],                           # YJX-CHIP (Smailwolf, EWEADN, MCHOSE)
     0x3537: ["gamesir_v1"],                       # GameSir XInput dongle (Cyclone 2)

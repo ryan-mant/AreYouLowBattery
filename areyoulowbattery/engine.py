@@ -131,14 +131,22 @@ def restore_device(
             for p in pids:
                 ignored.discard(f"{vid:04x}:{p:04x}")
         ignored.discard(f"{vid:04x}")
-        # Clean any override custom names associated with this hardware ID
+        # Clean any override custom names associated with this hardware ID or profile name
         try:
             overrides = load_device_overrides()
-            for key in (f"{vid:04x}:{pid:04x}" if pid else "", f"{vid:04x}"):
+            candidate_keys = [profile_name]
+            if vid is not None:
+                if pid is not None:
+                    candidate_keys.append(f"{vid:04x}:{pid:04x}")
+                candidate_keys.append(f"{vid:04x}")
+            for key in candidate_keys:
                 if key and key in overrides:
                     ovr = overrides[key].get("name")
                     if ovr:
                         ignored.discard(ovr)
+            for k, v in overrides.items():
+                if v.get("name") == profile_name:
+                    ignored.discard(k)
         except Exception:
             pass
     # Also clean any token-matched entries from ignored
