@@ -19,8 +19,15 @@ from areyoulowbattery.models import DeviceProfile, BatteryStatus
 from areyoulowbattery.clean_env import get_clean_env
 from areyoulowbattery.i18n import SUPPORTED_LANGUAGES, get_language, set_language, tr
 
-CACHE_DIR = "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
-CACHE_FILE = os.path.join(CACHE_DIR, "areyoulowbattery_status.json")
+def _get_cache_dir() -> str:
+    xdg_rt = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_rt and os.path.isdir(xdg_rt):
+        return xdg_rt
+    return "/dev/shm" if os.path.exists("/dev/shm") else tempfile.gettempdir()
+
+
+CACHE_DIR = _get_cache_dir()
+CACHE_FILE = os.path.join(CACHE_DIR, f"areyoulowbattery_status_{os.getuid() if hasattr(os, 'getuid') else 'user'}.json")
 
 
 def _pick_color(pct: Optional[int], is_charging: bool, is_connected: bool) -> str:
@@ -229,6 +236,7 @@ def _ensure_linux_desktop_entry():
             "Terminal=false\n"
             "Type=Application\n"
             "Categories=Utility;HardwareSettings;\n"
+            "StartupNotify=false\n"
             "StartupWMClass=areyoulowbattery\n"
         )
 
@@ -1037,7 +1045,6 @@ def run_tray(auto_show: bool = False):
                     )
 
     def write_cache(results: List[Tuple[DeviceProfile, BatteryStatus]]):
-        tmp_file = CACHE_FILE + ".tmp"
         cached_data = []
         for profile, status in results:
             cached_data.append({
@@ -1055,8 +1062,11 @@ def run_tray(auto_show: bool = False):
                 "details": status.details,
                 "timestamp": time.time(),
             })
+        tmp_file = None
         try:
-            with open(tmp_file, "w") as f:
+            cache_dir = os.path.dirname(CACHE_FILE) or CACHE_DIR
+            fd, tmp_file = tempfile.mkstemp(prefix=".areyoulowbattery_", suffix=".tmp", dir=cache_dir)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(cached_data, f)
             if sys.platform != "win32":
                 try:
@@ -1064,13 +1074,18 @@ def run_tray(auto_show: bool = False):
                 except OSError:
                     pass
             os.replace(tmp_file, CACHE_FILE)
+            tmp_file = None
             if sys.platform != "win32":
                 try:
                     os.chmod(CACHE_FILE, 0o600)
                 except OSError:
                     pass
         except Exception:
-            pass
+            if tmp_file and os.path.exists(tmp_file):
+                try:
+                    os.remove(tmp_file)
+                except OSError:
+                    pass
 
     def hotplug_watcher():
         """

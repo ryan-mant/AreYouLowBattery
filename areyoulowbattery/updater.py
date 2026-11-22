@@ -215,6 +215,8 @@ class DownloadWorker(QThread):
         self._is_cancelled = True
 
     def run(self):
+        import shutil
+        dest_dir = None
         try:
             req = urllib.request.Request(
                 self.download_url,
@@ -244,11 +246,7 @@ class DownloadWorker(QThread):
                 with open(target_path, "wb") as out_file:
                     while True:
                         if self._is_cancelled:
-                            try:
-                                os.remove(target_path)
-                                os.rmdir(dest_dir)
-                            except OSError:
-                                pass
+                            shutil.rmtree(dest_dir, ignore_errors=True)
                             return
 
                         chunk = resp.read(chunk_size)
@@ -264,11 +262,7 @@ class DownloadWorker(QThread):
 
             clean_expected = self.expected_sha256.lower().strip()
             if computed_sha256 != clean_expected:
-                try:
-                    os.remove(target_path)
-                    os.rmdir(dest_dir)
-                except OSError:
-                    pass
+                shutil.rmtree(dest_dir, ignore_errors=True)
                 self.failed.emit(
                     f"Security Check Failed: SHA-256 hash mismatch!\nExpected: {clean_expected}\nGot: {computed_sha256}"
                 )
@@ -276,6 +270,8 @@ class DownloadWorker(QThread):
 
             self.completed.emit(target_path)
         except Exception as e:
+            if dest_dir:
+                shutil.rmtree(dest_dir, ignore_errors=True)
             self.failed.emit(str(e))
 
 

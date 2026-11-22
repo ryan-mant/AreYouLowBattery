@@ -4,6 +4,25 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.6.1] — 2026-11-22 — ATK A9 Air (Compx 8K), Restore Flow Fix, Linux Hardening & Udev Sync
+
+### 🖱️ New Hardware & Protocol Fixes
+- **ATK A9 Air / Compx 8K Wireless Mouse (`0x373b`, `373b:11d9` / `373b:120a`)**:
+  - Added official profile ([`profiles/mice/atk_compx_8k.yaml`](profiles/mice/atk_compx_8k.yaml)), `VENDOR_PROTOCOL_MAP` entry in `discovery.py`, and hardened `udev` rule (`ATTRS{idVendor}=="373b"`) in `rules/99-areyoulowbattery.rules`.
+  - Fixed `NordicHandler` (`nordic_v1`) to fall back to `write_output_report` when a dongle defines Report ID `0x08` as Output-only and silently ignores `send_feature_report` without raising an OS error.
+
+### 🐛 Bug Fixes & Linux Hardening
+- **Remove → Find Devices → Restore Flow**: Fixed `restore_device()` in `areyoulowbattery/engine.py` to also un-ignore custom renamed device names stored under `profile_name` in `device_overrides.json` (previously only `vid:pid` / `vid` keys were checked, leaving renamed devices hidden from the dashboard after restoring).
+- **Outdated `udev` Rules Detection** — contributed by **[@emreocell](https://github.com/emreocell)** in PR #32 (#30):
+  - `are_udev_rules_installed()` now compares installed rules against the bundled `rules/99-areyoulowbattery.rules` so newly added vendor IDs (`a8a5`, `3537`, `373b`, etc.) trigger the installer prompt on upgrades.
+- **Security & Linux Packaging Hardening** (PR #29):
+  - Hardened temporary cache paths, `systemd` `ExecStart` quoting, `sysfs` file-handle cleanup, and pinned GitHub Actions release SHAs.
+
+### 🧪 Automated QA & Frontend Tests
+- Added **`tests/test_ui_flows.py`** (PySide6 offscreen UI tests) covering dashboard header & empty-state buttons, `DeviceCard` menu actions (`Change Protocol`, `Rename`, `Change Type`, `Remove`), *Find Devices* (`Test Protocol`, `Save`, `Rescan`, `Done`), and the end-to-end **Remove → Find Devices → Test Protocol → Restore** regression with custom renames.
+
+---
+
 ## [v0.6.0] — 2026-11-18 — GameSir Cyclone 2, Bilingual UI (EN/PT-BR), Game Mode Controls, Waybar & Linux Footprint
 
 ### 🎮 New Hardware & Protocol Improvements

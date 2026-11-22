@@ -69,6 +69,24 @@ class NordicHandler(BaseProtocolHandler):
         desc = self._desc_cache[key]
         return b"\x85\x08" in desc or b"\x85\x09" in desc or b"\x06\x00\xff" in desc
 
+    @staticmethod
+    def _poll_response(open_transports, timeout_sec: float) -> Optional[bytes]:
+        pkt = None
+        deadline = time.time() + timeout_sec
+        per_handle_timeout = 0.04 if len(open_transports) > 1 else 0.12
+        while time.time() < deadline and pkt is None:
+            for t in open_transports:
+                rx = t.read_input_report(
+                    length=64,
+                    timeout_sec=min(per_handle_timeout, max(0.01, deadline - time.time())),
+                )
+                if rx and len(rx) >= 8 and rx[0] in (0x08, 0x09) and rx[1] in (0x04, 0x07):
+                    if not (rx[5] == 0 and rx[6] == 0 and rx[7] == 0):
+                        return rx
+                    if pkt is None:
+                        pkt = rx
+        return pkt
+
     def read_battery(self, dev: HidrawDevice, profile: DeviceProfile) -> Optional[BatteryStatus]:
         if not self._has_vendor_descriptor(dev):
             return None
@@ -108,29 +126,32 @@ class NordicHandler(BaseProtocolHandler):
             if not open_transports:
                 return BatteryStatus(0, is_connected=False, details="Failed to open HID vendor interface")
 
+            # Some Compx/Nordic dongles (e.g. 0x3554) accept Feature Report 0x08, while newer
+            # Compx/ATK 8K dongles (e.g. 0x373b) define 0x08 as an Output Report only and
+            # silently ignore HIDIOCSFEATURE without raising an error.
+            sent_output = []
             for t in open_transports:
+                used_output = False
                 try:
                     t.send_feature_report(bytes(req))
                 except Exception:
+                    used_output = True
                     try:
                         t.write_output_report(bytes(req))
                     except Exception:
                         pass
+                sent_output.append(used_output)
 
-            deadline = time.time() + 0.45
-            per_handle_timeout = 0.04 if len(open_transports) > 1 else 0.12
-            while time.time() < deadline and pkt is None:
-                for t in open_transports:
-                    rx = t.read_input_report(
-                        length=64,
-                        timeout_sec=min(per_handle_timeout, max(0.01, deadline - time.time()))
-                    )
-                    if rx and len(rx) >= 8 and rx[0] in (0x08, 0x09) and rx[1] in (0x04, 0x07):
-                        if not (rx[5] == 0 and rx[6] == 0 and rx[7] == 0):
-                            pkt = rx
-                            break
-                        elif pkt is None:
-                            pkt = rx
+            pkt = self._poll_response(open_transports, timeout_sec=0.25)
+
+            if pkt is None and not all(sent_output):
+                for t, already_sent in zip(open_transports, sent_output):
+                    if not already_sent:
+                        try:
+                            t.write_output_report(bytes(req))
+                        except Exception:
+                            pass
+                pkt = self._poll_response(open_transports, timeout_sec=0.25)
         finally:
             for t in open_transports:
                 t.close()

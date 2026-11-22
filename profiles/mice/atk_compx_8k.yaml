@@ -1,0 +1,10 @@
+name: "ATK / Compx 8K Wireless Mouse"
+category: "mouse"
+icon: "🖱️"
+match:
+  vendor_id: "0x373b"
+  # Used by ATK A9 Air (0x11d9 8K wireless dongle, 0x120a USB-C wired mode) and related Compx 8K mice
+  interface_number: 1
+protocol: "nordic_v1"
+config:
+  charging_seconds_per_percent: 75

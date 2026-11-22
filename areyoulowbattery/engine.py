@@ -131,14 +131,22 @@ def restore_device(
             for p in pids:
                 ignored.discard(f"{vid:04x}:{p:04x}")
         ignored.discard(f"{vid:04x}")
-        # Clean any override custom names associated with this hardware ID
+        # Clean any override custom names associated with this hardware ID or profile name
         try:
             overrides = load_device_overrides()
-            for key in (f"{vid:04x}:{pid:04x}" if pid else "", f"{vid:04x}"):
+            candidate_keys = [profile_name]
+            if vid is not None:
+                if pid is not None:
+                    candidate_keys.append(f"{vid:04x}:{pid:04x}")
+                candidate_keys.append(f"{vid:04x}")
+            for key in candidate_keys:
                 if key and key in overrides:
                     ovr = overrides[key].get("name")
                     if ovr:
                         ignored.discard(ovr)
+            for k, v in overrides.items():
+                if v.get("name") == profile_name:
+                    ignored.discard(k)
         except Exception:
             pass
     # Also clean any token-matched entries from ignored
@@ -805,7 +813,8 @@ class BatteryEngine:
             if not os.path.exists(scope_file):
                 continue
             try:
-                scope = open(scope_file, "r").read().strip()
+                with open(scope_file, "r", encoding="utf-8") as f:
+                    scope = f.read().strip()
                 if scope.lower() != "device":
                     continue
             except Exception:
@@ -819,7 +828,8 @@ class BatteryEngine:
             cap_file = os.path.join(ps_path, "capacity")
             if os.path.exists(cap_file):
                 try:
-                    capacity = int(open(cap_file, "r").read().strip())
+                    with open(cap_file, "r", encoding="utf-8") as f:
+                        capacity = int(f.read().strip())
                 except Exception:
                     capacity = None
 
@@ -828,7 +838,8 @@ class BatteryEngine:
                 if not os.path.exists(cap_level_file):
                     continue
                 try:
-                    level_str = open(cap_level_file, "r").read().strip()
+                    with open(cap_level_file, "r", encoding="utf-8") as f:
+                        level_str = f.read().strip()
                 except Exception:
                     continue
                 capacity = SYSFS_CAPACITY_LEVEL_MAP.get(level_str.lower())
@@ -841,16 +852,20 @@ class BatteryEngine:
                 )
 
             model_file = os.path.join(ps_path, "model_name")
-            name = (
-                open(model_file, "r").read().strip()
-                if os.path.exists(model_file)
-                else os.path.basename(ps_path)
-            )
+            if os.path.exists(model_file):
+                with open(model_file, "r", encoding="utf-8") as f:
+                    name = f.read().strip()
+            else:
+                name = os.path.basename(ps_path)
             if name in seen_names:
                 continue
 
             status_file = os.path.join(ps_path, "status")
-            status_str = open(status_file, "r").read().strip().lower() if os.path.exists(status_file) else ""
+            if os.path.exists(status_file):
+                with open(status_file, "r", encoding="utf-8") as f:
+                    status_str = f.read().strip().lower()
+            else:
+                status_str = ""
             is_charging = status_str == "charging"
 
             cat, icon = _infer_category_and_icon(name)

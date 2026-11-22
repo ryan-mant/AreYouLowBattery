@@ -1,5 +1,7 @@
 import os
+import re
 import json
+import tempfile
 import unittest
 from unittest.mock import patch, MagicMock, mock_open
 
@@ -195,6 +197,43 @@ class TestAreYouLowBattery(unittest.TestCase):
                 self.assertTrue(st.is_connected)
                 self.assertEqual(st.percentage, 88)
                 self.assertFalse(st.is_charging)
+        finally:
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+
+    def test_nordic_8k_output_report_fallback(self):
+        """Devices like ATK A9 Air (0x373b) ignore Feature Report 0x08 without error and reply only to Output Report."""
+        handler = NordicHandler()
+        prof = DeviceProfile(
+            name="UnitTest ATK A9 Air",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x373B, interface_number=1),
+            protocol="nordic_v1",
+        )
+        dev = HidrawDevice("/dev/hidraw96", 0x373B, 0x11D9, 1, "Wireless mouse 8k dongle-L")
+        cache_file = handler._cache_path(prof, dev)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+
+        pkt = bytes.fromhex("080400000002640010fd000000000000d6")
+
+        class OutputOnlyTransport(FakeTransport):
+            def read_input_report(self, length: int = 64, timeout_sec: float = 0.1):
+                if self.sent_outputs and self.responses:
+                    return self.responses.pop(0)
+                return None
+
+        transport = OutputOnlyTransport([pkt])
+        try:
+            with patch.object(handler, "_has_vendor_descriptor", return_value=True), \
+                 patch("areyoulowbattery.handlers.nordic.HidrawTransport", return_value=transport):
+                st = handler.read_battery(dev, prof)
+                self.assertTrue(st.is_connected)
+                self.assertEqual(st.percentage, 100)
+                self.assertFalse(st.is_charging)
+                self.assertEqual(len(transport.sent_features), 1)
+                self.assertEqual(len(transport.sent_outputs), 1)
         finally:
             if os.path.exists(cache_file):
                 os.remove(cache_file)
@@ -769,6 +808,31 @@ class TestAreYouLowBattery(unittest.TestCase):
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_restore_device_clears_name_override_ignored(self):
+        """restore_device must un-ignore custom renamed names from device_overrides.json."""
+        import tempfile
+        from areyoulowbattery.engine import (
+            load_ignored_devices,
+            remove_device,
+            restore_device,
+            save_device_override,
+        )
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            with patch("areyoulowbattery.engine._get_config_dir", return_value=tmp_dir), \
+                 patch("areyoulowbattery.discovery.get_user_profiles_dir", return_value=os.path.join(tmp_dir, "profiles")):
+                save_device_override("Compx Wireless mouse 8k dongle-L", name="ATK A9Air")
+                remove_device("ATK A9Air", 0x373B, 0x11D9)
+                self.assertIn("ATK A9Air", load_ignored_devices())
+
+                restore_device("Compx Wireless mouse 8k dongle-L", 0x373B, 0x11D9)
+                self.assertNotIn("ATK A9Air", load_ignored_devices())
+                self.assertNotIn("373b:11d9", load_ignored_devices())
+        finally:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     def test_dynamic_protocol_change(self):
         import tempfile
         from areyoulowbattery.engine import BatteryEngine, save_device_protocol
@@ -1276,16 +1340,41 @@ class TestAreYouLowBattery(unittest.TestCase):
         self.assertIsNotNone(src_path)
         self.assertTrue(os.path.exists(src_path))
 
-        # 3. Test check with mocked file content
-        valid_rules = '1d57 25a7 046d'
-        with patch("sys.platform", "linux"):
-            with patch("os.path.exists", return_value=True):
-                with patch("builtins.open", mock_open(read_data=valid_rules)):
-                    self.assertTrue(are_udev_rules_installed())
+        # 3. Rules are compared against the bundled file, not a fixed list of vendor IDs
+        with open(src_path, "r", encoding="utf-8") as f:
+            bundled_rules = f.read()
+        bundled_vids = set(re.findall(r'ATTRS\{idVendor\}=="([0-9a-f]{4})"', bundled_rules))
+        self.assertTrue({"a8a5", "3537"} <= bundled_vids)
 
-                # Outdated or corrupted rules return False
-                with patch("builtins.open", mock_open(read_data="old rules without hardening")):
-                    self.assertFalse(are_udev_rules_installed())
+        with tempfile.TemporaryDirectory() as tmp:
+            installed = os.path.join(tmp, "99-areyoulowbattery.rules")
+
+            def check(content):
+                with open(installed, "w", encoding="utf-8") as f:
+                    f.write(content)
+                with patch("sys.platform", "linux"):
+                    with patch("areyoulowbattery.udev_installer.TARGET_RULES_PATH", installed):
+                        return are_udev_rules_installed()
+
+            # An exact copy of the bundled rules is up to date
+            self.assertTrue(check(bundled_rules))
+
+            # Comments, blank lines, indentation and rule order do not matter
+            rule_lines = [l for l in bundled_rules.splitlines() if l.strip() and not l.startswith("#")]
+            reordered = "# local note\n\n" + "\n".join("  " + l for l in reversed(rule_lines)) + "\n"
+            self.assertTrue(check(reordered))
+
+            # Rules from an older release that only know the three legacy VIDs are outdated
+            legacy = [l for l in rule_lines if any(f'"{vid}"' in l for vid in ("1d57", "25a7", "046d"))]
+            self.assertEqual(len(legacy), 3)
+            self.assertFalse(check("\n".join(legacy) + "\n"))
+
+            # Dropping any single newer VID makes the installed rules outdated
+            for vid in ("a8a5", "3537"):
+                self.assertFalse(check("\n".join(l for l in rule_lines if f'"{vid}"' not in l) + "\n"), vid)
+
+            # Unrelated content is outdated
+            self.assertFalse(check("old rules without hardening"))
 
         # 4. Successful installation via pkexec (passing args directly without sh -c)
         mock_proc_ok = MagicMock()

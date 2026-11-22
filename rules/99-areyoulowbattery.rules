@@ -24,6 +24,9 @@ ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="248a
 ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1915", MODE="0660", TAG+="uaccess"
 ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3554", MODE="0660", TAG+="uaccess"
 
+# Compx / ATK 8K wireless mice & dongles (ATK A9 Air, etc.) (VID: 0x373b)
+ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="373b", MODE="0660", TAG+="uaccess"
+
 # Logitech Lightspeed / Bolt / Unifying receivers (VID: 0x046d)
 ACTION!="remove", KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="046d", MODE="0660", TAG+="uaccess"
 
