@@ -191,12 +191,42 @@ def find_matching_asset(release_info: Dict[str, Any], platform: str = sys.platfo
             if a.get("name", "").lower().endswith(".exe"):
                 return a
     elif platform.startswith("linux"):
+        # Prefer standalone ELF executable over archives/checksums (e.g. .tar.gz, .sha256)
         for a in assets:
             name = a.get("name", "").lower()
-            if "linux-x86_64" in name or name == "areyoulowbattery":
+            if name in ("areyoulowbattery-linux-x86_64", "areyoulowbattery"):
+                return a
+        for a in assets:
+            name = a.get("name", "").lower()
+            if "linux-x86_64" in name and not name.endswith((".tar.gz", ".zip", ".sha256", ".sig", ".asc")):
                 return a
 
     return None
+
+
+def _atomic_replace_executable(src_path: str, dst_path: str) -> None:
+    """Atomically replaces a Linux executable (avoiding ETXTBSY and symlink overwrite)."""
+    import shutil
+    import tempfile
+
+    dst_dir = os.path.dirname(dst_path)
+    os.makedirs(dst_dir, exist_ok=True)
+    if os.path.islink(dst_path):
+        os.unlink(dst_path)
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".areyoulowbattery-upd-", dir=dst_dir)
+    os.close(fd)
+    try:
+        shutil.copy2(src_path, tmp_path)
+        os.chmod(tmp_path, 0o755)
+        os.replace(tmp_path, dst_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        raise
 
 
 class DownloadWorker(QThread):
@@ -483,18 +513,38 @@ class UpdateDialog(QDialog):
                 QMessageBox.critical(self, tr("updater.error.title"), tr("updater.error.run_installer", e=e))
                 self.install_btn.setEnabled(True)
         else:
-            # Linux: replace ~/.local/bin/areyoulowbattery or restart service
-            target_bin = os.path.expanduser("~/.local/bin/areyoulowbattery")
-            if os.path.exists(target_bin) or not getattr(sys, "frozen", False):
+            # Linux: update ~/.local/bin/areyoulowbattery or current frozen executable atomically
+            installed_bin = os.path.expanduser("~/.local/bin/areyoulowbattery")
+            target_bin = None
+            if os.path.lexists(installed_bin):
+                target_bin = installed_bin
+            elif getattr(sys, "frozen", False):
+                current_exe = os.path.realpath(sys.executable)
+                if os.access(os.path.dirname(current_exe), os.W_OK):
+                    target_bin = current_exe
+
+            if target_bin:
                 try:
-                    import shutil
-                    os.chmod(local_path, 0o755)
-                    os.makedirs(os.path.dirname(target_bin), exist_ok=True)
-                    shutil.copy2(local_path, target_bin)
-                    os.chmod(target_bin, 0o755)
-                    # Restart systemd user service if running
+                    _atomic_replace_executable(local_path, target_bin)
                     from areyoulowbattery.clean_env import get_clean_env
-                    subprocess.run(["systemctl", "--user", "restart", "areyoulowbattery.service"], check=False, env=get_clean_env())
+                    clean_env = get_clean_env()
+                    svc_active = subprocess.run(
+                        ["systemctl", "--user", "is-active", "--quiet", "areyoulowbattery.service"],
+                        check=False,
+                        env=clean_env,
+                    )
+                    if svc_active.returncode == 0:
+                        subprocess.run(
+                            ["systemctl", "--user", "restart", "areyoulowbattery.service"],
+                            check=False,
+                            env=clean_env,
+                        )
+                    else:
+                        subprocess.Popen(
+                            [target_bin, "--tray"],
+                            start_new_session=True,
+                            env=clean_env,
+                        )
                     QMessageBox.information(
                         self,
                         tr("updater.installed.title"),
