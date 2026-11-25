@@ -4,6 +4,22 @@ All notable changes to **AreYouLowBattery** from release to release are document
 
 ---
 
+## [v0.6.2] — 2026-11-25 — Vector Charging Tray Icon, Atomic Linux Updater & Python 3.10+ CI
+
+### 🐛 Bug Fixes & Linux UX (PR #33)
+- **Vector Charging Tray Icon (`areyoulowbattery/tray.py`)**:
+  - Replaced Unicode emoji `⚡` text rendering (which failed to display inside the 64×64 tray icon on Linux/Nobara) with a crisp vector lightning polygon (`_draw_vector_lightning`) in both single-device and multi-device tray icons.
+- **Reliable Linux Auto-Updater (`areyoulowbattery/updater.py`, `areyoulowbattery/i18n.py`)**:
+  - `find_matching_asset()` now prefers the standalone Linux ELF binary over `.tar.gz` / `.sha256` assets.
+  - Added `_atomic_replace_executable()` using a temporary file + `os.replace()` to prevent `ETXTBSY` on running binaries and avoid overwriting `--onedir` symlinks.
+  - Updates writable standalone frozen executables directly, relaunches `--tray` automatically when `systemd --user` is not active, and provides exact `{path} install` / `{path} --tray` commands in manual fallback prompts (EN & PT-BR).
+
+### 🧪 Packaging & CI Alignment
+- Aligned `requires-python = ">=3.10"` in `pyproject.toml` with `README.md`.
+- Expanded `.github/workflows/pr-check.yml` to run automated tests across **Python 3.10 and 3.12** on Linux (plus Python 3.12 on Windows), bringing total automated tests to **115/115 passing**.
+
+---
+
 ## [v0.6.1] — 2026-11-22 — ATK A9 Air (Compx 8K), Restore Flow Fix, Linux Hardening & Udev Sync
 
 ### 🖱️ New Hardware & Protocol Fixes
