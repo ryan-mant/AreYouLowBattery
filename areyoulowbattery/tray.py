@@ -44,6 +44,29 @@ def _pick_color(pct: Optional[int], is_charging: bool, is_connected: bool) -> st
     return "#4ade80"      # green
 
 
+def _draw_vector_lightning(painter, size: float, fill_color) -> None:
+    """Draws a crisp vector lightning bolt centered in a square canvas (independent of emoji fonts)."""
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QPolygonF
+
+    cx = size / 2.0
+    cy = size / 2.0
+    s = size / 64.0
+    bolt = QPolygonF([
+        QPointF(cx + 3.0 * s, cy - 16.0 * s),
+        QPointF(cx - 10.0 * s, cy + 2.0 * s),
+        QPointF(cx - 1.0 * s, cy + 2.0 * s),
+        QPointF(cx - 4.0 * s, cy + 16.0 * s),
+        QPointF(cx + 10.0 * s, cy - 2.0 * s),
+        QPointF(cx + 1.0 * s, cy - 2.0 * s),
+    ])
+    painter.save()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(fill_color)
+    painter.drawPolygon(bolt)
+    painter.restore()
+
+
 def _render_tray_icon(
     pct: Optional[int],
     is_charging: bool,
@@ -102,10 +125,13 @@ def _render_tray_icon(
         # Qt angles are in 1/16th of a degree; start at 90 deg (top) and go clockwise
         painter.drawArc(rect, 90 * 16, int(-360 * 16 * (span_pct / 100.0)))
 
-    font = QFont("Sans Serif", font_size, QFont.Weight.Bold)
-    painter.setFont(font)
-    painter.setPen(QColor("#f8fafc"))
-    painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+    if label == "⚡":
+        _draw_vector_lightning(painter, size, QColor("#f8fafc"))
+    else:
+        font = QFont("Sans Serif", font_size, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.setPen(QColor("#f8fafc"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
     painter.end()
     from PySide6.QtGui import QIcon
@@ -154,10 +180,7 @@ def _render_multi_tray_icon(devices: List[Tuple[DeviceProfile, BatteryStatus]]):
     center_color = QColor(_pick_color(min_pct, any_charging, True))
 
     if any_charging:
-        font = QFont("Sans Serif", 24, QFont.Weight.Bold)
-        painter.setFont(font)
-        painter.setPen(center_color)
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "⚡")
+        _draw_vector_lightning(painter, size, center_color)
     else:
         # Draw a crisp vector battery icon in the center
         batt_pen = QPen(QColor("#f8fafc"), 3)

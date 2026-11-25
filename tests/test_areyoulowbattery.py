@@ -590,6 +590,41 @@ class TestAreYouLowBattery(unittest.TestCase):
         self.assertIsNotNone(linux_asset)
         self.assertEqual(linux_asset["name"], "areyoulowbattery-linux-x86_64")
 
+        # Must prefer standalone binary over .tar.gz / .sha256 even when listed first
+        release_with_archive = {
+            "assets": [
+                {"name": "areyoulowbattery-linux-x86_64.tar.gz"},
+                {"name": "areyoulowbattery-linux-x86_64.sha256"},
+                {"name": "areyoulowbattery-linux-x86_64"},
+            ]
+        }
+        picked = find_matching_asset(release_with_archive, platform="linux")
+        self.assertEqual(picked["name"], "areyoulowbattery-linux-x86_64")
+
+    def test_updater_atomic_replace_executable_handles_symlink(self):
+        from areyoulowbattery.updater import _atomic_replace_executable
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "new_bin")
+            with open(src, "wb") as f:
+                f.write(b"NEW_ELF")
+
+            old_target = os.path.join(tmp, "onedir_bin")
+            with open(old_target, "wb") as f:
+                f.write(b"OLD_ONEDIR")
+
+            dst = os.path.join(tmp, "areyoulowbattery")
+            if hasattr(os, "symlink"):
+                os.symlink(old_target, dst)
+
+            _atomic_replace_executable(src, dst)
+            self.assertFalse(os.path.islink(dst))
+            with open(dst, "rb") as f:
+                self.assertEqual(f.read(), b"NEW_ELF")
+            # Original symlink target was not overwritten
+            with open(old_target, "rb") as f:
+                self.assertEqual(f.read(), b"OLD_ONEDIR")
+
     def test_updater_fetch_latest_release(self):
         from areyoulowbattery.updater import fetch_latest_release
         mock_data = json.dumps({

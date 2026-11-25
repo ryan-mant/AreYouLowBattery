@@ -235,6 +235,38 @@ class TestFrontendButtonsAndFlows(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_tray_charging_icon_renders_vector_lightning_pixels(self):
+        from areyoulowbattery.tray import _render_multi_tray_icon, _render_tray_icon
+
+        single_icon = _render_tray_icon(95, is_charging=True, is_connected=True)
+        img = single_icon.pixmap(64, 64).toImage()
+        center_alpha = sum(
+            1
+            for x in range(24, 40)
+            for y in range(20, 44)
+            if img.pixelColor(x, y).alpha() > 0
+        )
+        self.assertGreater(center_alpha, 40)
+
+        prof = DeviceProfile(
+            name="ATK A9Air",
+            category=DeviceCategory.MOUSE,
+            icon="🖱️",
+            match=DeviceMatch(vendor_id=0x373B, product_id=0x120A, interface_number=1),
+            protocol="nordic_v1",
+        )
+        multi_icon = _render_multi_tray_icon(
+            [(prof, BatteryStatus(percentage=95, is_charging=True, is_connected=True))]
+        )
+        m_img = multi_icon.pixmap(64, 64).toImage()
+        m_center_alpha = sum(
+            1
+            for x in range(24, 40)
+            for y in range(20, 44)
+            if m_img.pixelColor(x, y).alpha() > 0
+        )
+        self.assertGreater(m_center_alpha, 40)
+
 
 if __name__ == "__main__":
     unittest.main()
